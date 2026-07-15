@@ -12,7 +12,7 @@ setup(
         (f'share/{package_name}/launch', ['launch/dashboard.launch.py']),
         (f'share/{package_name}/www', ['www/index.html']),
     ],
-    install_requires=['setuptools'],
+    install_requires=['setuptools', 'aiohttp'],
     zip_safe=True,
     maintainer='ecobot',
     maintainer_email='user@ecobot.local',

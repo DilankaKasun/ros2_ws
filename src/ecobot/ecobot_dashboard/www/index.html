@@ -23,7 +23,7 @@ h1 { font-size: 1.4rem; margin-bottom: 12px; display: flex; align-items: center;
 .badge.cmd { background: #00c853; color: #000; }
 .badge.rc { background: #ff6d00; color: #000; }
 canvas { width: 100%; height: auto; border: 1px solid #ffffff22; border-radius: 4px; touch-action: none; }
-.camera-frame { width: 100%; max-height: 360px; object-fit: contain; border-radius: 4px; border: 1px solid #ffffff22; background: #0d1b2a; }
+.camera-frame { width: 100%; max-height: 360px; object-fit: contain; border-radius: 4px; border: 1px solid #ffffff22; background: #0d1b2a; display: block; }
 .joystick-container { position: relative; width: 100%; aspect-ratio: 1; max-width: 200px; }
 .joystick-container canvas { position: absolute; top: 0; left: 0; }
 .controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
@@ -32,6 +32,23 @@ button.emergency { background: #d50000; color: white; }
 button.emergency:hover { background: #ff1744; }
 input[type=range] { width: 100px; }
 .camera-grid { display: grid; grid-template-columns: 1.5fr 1fr; gap: 12px; align-items: start; }
+
+.zone-bars { display: flex; gap: 4px; align-items: flex-end; padding: 4px 0; }
+.zone-bar { flex: 1; border-radius: 4px 4px 0 0; min-height: 8px; transition: height 0.2s, background 0.2s; position: relative; }
+.zone-bar-label { text-align: center; font-size: 0.65rem; margin-top: 2px; color: #90a4ae; }
+
+.turning-indicator { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+.turning-arrow { font-size: 2rem; line-height: 1; }
+.turning-text { font-size: 1.1rem; font-weight: bold; text-transform: uppercase; }
+.turning-forward { color: #00e676; }
+.turning-left, .turning-right { color: #ffab00; }
+.turning-stopped { color: #ff1744; }
+
+.ws-indicator { display: flex; align-items: center; gap: 6px; font-size: 0.8rem; margin-top: 4px; }
+.ws-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.ws-dot.on { background: #00e676; }
+.ws-dot.off { background: #ff1744; }
+
 @media (max-width: 700px) { .camera-grid { grid-template-columns: 1fr; } }
 </style>
 </head>
@@ -41,7 +58,7 @@ input[type=range] { width: 100px; }
 <div class="camera-grid">
   <div class="card">
     <h2>Camera Feed</h2>
-    <img class="camera-frame" id="cameraFeed" src="" alt="camera feed">
+    <canvas class="camera-frame" id="cameraCanvas" width="640" height="360"></canvas>
   </div>
   <div>
     <div class="card">
@@ -60,8 +77,33 @@ input[type=range] { width: 100px; }
 </div>
 
 <div class="card">
-  <h2>Obstacle View</h2>
-  <img class="camera-frame" id="obstacleFeed" src="" alt="obstacle view">
+  <h2>Obstacle Detection</h2>
+  <div class="stat-row">
+    <span class="stat-label">Turning Status</span>
+    <span id="turningIndicator">
+      <span class="turning-arrow">&#x2191;</span>
+      <span class="turning-text turning-forward" id="turningText">FORWARD</span>
+    </span>
+  </div>
+  <div style="margin-top: 8px;">
+    <div class="stat-label" style="margin-bottom: 4px;">Zone Distances (m)</div>
+    <div class="zone-bars" id="zoneBars">
+      <div class="zone-bar" style="height:40px;background:#444;"><div class="zone-bar-label">Z1</div></div>
+      <div class="zone-bar" style="height:40px;background:#444;"><div class="zone-bar-label">Z2</div></div>
+      <div class="zone-bar" style="height:40px;background:#444;"><div class="zone-bar-label">Z3</div></div>
+      <div class="zone-bar" style="height:40px;background:#444;"><div class="zone-bar-label">Z4</div></div>
+      <div class="zone-bar" style="height:40px;background:#444;"><div class="zone-bar-label">Z5</div></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:6px;font-size:0.7rem;">
+      <span style="color:#00e676;">&#x25A0; clear</span>
+      <span style="color:#ffab00;">&#x25A0; warn</span>
+      <span style="color:#ff1744;">&#x25A0; danger</span>
+    </div>
+  </div>
+  <div class="ws-indicator">
+    <span class="ws-dot off" id="wsDot"></span>
+    <span id="wsLabel">Dashboard WS disconnected</span>
+  </div>
 </div>
 
 <div class="card">
@@ -81,67 +123,159 @@ input[type=range] { width: 100px; }
 </div>
 
 <script>
-const ROS_URL = 'ws://' + location.hostname + ':9090';
-const ros = new ROSLIB.Ros({ url: ROS_URL });
+var wsAddress = 'ws://' + location.hostname + ':8080/ws';
+var dashboardWs = null;
 
-const cameraImg = document.getElementById('cameraFeed');
-const obstacleImg = document.getElementById('obstacleFeed');
+var cameraCanvas = document.getElementById('cameraCanvas');
+var cameraCtx = cameraCanvas.getContext('2d');
+var camImage = new Image();
 
-function startMJPEG() {
-  cameraImg.src = `http://${location.hostname}:8081/stream.mjpg?_=${Date.now()}`;
-  obstacleImg.src = `http://${location.hostname}:8083/obstacle.mjpg?_=${Date.now()}`;
+var wsDot = document.getElementById('wsDot');
+var wsLabel = document.getElementById('wsLabel');
+var zoneBars = document.getElementById('zoneBars');
+var turningText = document.getElementById('turningText');
+var turningArrow = document.getElementById('turningIndicator').querySelector('.turning-arrow');
+
+var BAR_MAX_HEIGHT = 60;
+
+function setWsConnected(connected) {
+  wsDot.className = 'ws-dot ' + (connected ? 'on' : 'off');
+  wsLabel.textContent = connected ? 'Dashboard WS connected' : 'Dashboard WS disconnected';
 }
-cameraImg.onerror = () => setTimeout(startMJPEG, 2000);
-obstacleImg.onerror = () => setTimeout(startMJPEG, 2000);
-startMJPEG();
 
-ros.on('connection', () => {
+function connectDashboardWs() {
+  if (dashboardWs) { dashboardWs.close(); }
+  dashboardWs = new WebSocket(wsAddress);
+
+  dashboardWs.onopen = function() {
+    setWsConnected(true);
+  };
+
+  dashboardWs.onclose = function() {
+    setWsConnected(false);
+    setTimeout(connectDashboardWs, 3000);
+  };
+
+  dashboardWs.onerror = function() {
+    setWsConnected(false);
+  };
+
+  dashboardWs.onmessage = function(evt) {
+    var lines = evt.data.split('\n');
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      if (!line) continue;
+      try {
+        var msg = JSON.parse(line);
+        handleWsMessage(msg);
+      } catch(e) {}
+    }
+  };
+}
+
+function handleWsMessage(msg) {
+  switch (msg.type) {
+    case 'camera':
+      camImage.onload = function() {
+        var cw = cameraCanvas.width;
+        var ch = cameraCanvas.height;
+        var scale = Math.min(cw / camImage.width, ch / camImage.height);
+        var dw = camImage.width * scale;
+        var dh = camImage.height * scale;
+        cameraCtx.fillStyle = '#0d1b2a';
+        cameraCtx.fillRect(0, 0, cw, ch);
+        cameraCtx.drawImage(camImage, (cw - dw) / 2, (ch - dh) / 2, dw, dh);
+      };
+      camImage.src = 'data:image/jpeg;base64,' + msg.data;
+      break;
+
+    case 'odom':
+      document.getElementById('posX').textContent = msg.data.x.toFixed(2);
+      document.getElementById('posY').textContent = msg.data.y.toFixed(2);
+      document.getElementById('posYaw').textContent = msg.data.yaw.toFixed(2);
+      document.getElementById('velLinear').textContent = msg.data.linear.toFixed(2);
+      document.getElementById('velAngular').textContent = msg.data.angular.toFixed(2);
+      break;
+
+    case 'mode':
+      var badge = document.getElementById('modeBadge');
+      if (msg.data.mode === 1) {
+        badge.textContent = 'CMD';
+        badge.className = 'badge cmd';
+      } else {
+        badge.textContent = 'RC';
+        badge.className = 'badge rc';
+      }
+      break;
+
+    case 'obstacles':
+      var zones = msg.data.zones;
+      var cmd = msg.data.turning;
+      var safe = msg.data.safe_distance || 0.8;
+      var warn = msg.data.warn_distance || 1.2;
+
+      var bars = zoneBars.children;
+      for (var j = 0; j < bars.length; j++) {
+        var bar = bars[j];
+        var d = j < zones.length ? zones[j] : 99.0;
+        var h = Math.max(8, Math.min(BAR_MAX_HEIGHT, (d / 3.0) * BAR_MAX_HEIGHT));
+        var color;
+        if (d < safe) { color = '#ff1744'; }
+        else if (d < warn) { color = '#ffab00'; }
+        else { color = '#00e676'; }
+        bar.style.height = h + 'px';
+        bar.style.background = color;
+        bar.querySelector('.zone-bar-label').textContent =
+          (d < 10 ? d.toFixed(1) : '---') + 'm';
+      }
+
+      turningText.textContent = cmd;
+      turningText.className = 'turning-text ' +
+        (cmd === 'FORWARD' ? 'turning-forward' :
+         cmd === 'STOPPED' ? 'turning-stopped' : 'turning-left');
+      if (cmd === 'FORWARD') {
+        turningArrow.innerHTML = '&#x2191;';
+        turningArrow.className = 'turning-arrow turning-forward';
+      } else if (cmd === 'TURN LEFT') {
+        turningArrow.innerHTML = '&#x2190;';
+        turningArrow.className = 'turning-arrow turning-left';
+      } else if (cmd === 'TURN RIGHT') {
+        turningArrow.innerHTML = '&#x2192;';
+        turningArrow.className = 'turning-arrow turning-right';
+      } else {
+        turningArrow.innerHTML = '&#x2B1B;';
+        turningArrow.className = 'turning-arrow turning-stopped';
+      }
+      break;
+  }
+}
+
+connectDashboardWs();
+</script>
+
+<script>
+var ROS_URL = 'ws://' + location.hostname + ':9090';
+var ros = new ROSLIB.Ros({ url: ROS_URL });
+
+ros.on('connection', function() {
   document.getElementById('statusDot').className = 'status-dot connected';
 });
-ros.on('close', () => {
+ros.on('close', function() {
   document.getElementById('statusDot').className = 'status-dot disconnected';
 });
-ros.on('error', () => {
+ros.on('error', function() {
   document.getElementById('statusDot').className = 'status-dot disconnected';
 });
 
-const cmdVelPub = new ROSLIB.Topic({
-  ros, name: '/cmd_vel', messageType: 'geometry_msgs/Twist'
-});
-const odomSub = new ROSLIB.Topic({
-  ros, name: '/odom', messageType: 'nav_msgs/Odometry'
-});
-const modeSub = new ROSLIB.Topic({
-  ros, name: '/run_mode', messageType: 'std_msgs/UInt8'
+var cmdVelPub = new ROSLIB.Topic({
+  ros: ros, name: '/cmd_vel', messageType: 'geometry_msgs/Twist'
 });
 
-odomSub.subscribe(msg => {
-  const p = msg.pose.pose.position;
-  const o = msg.pose.pose.orientation;
-  const yaw = Math.atan2(2*(o.w*o.z), 1-2*(o.z*o.z));
-  document.getElementById('posX').textContent = p.x.toFixed(2);
-  document.getElementById('posY').textContent = p.y.toFixed(2);
-  document.getElementById('posYaw').textContent = yaw.toFixed(2);
-  document.getElementById('velLinear').textContent = msg.twist.twist.linear.x.toFixed(2);
-  document.getElementById('velAngular').textContent = msg.twist.twist.angular.z.toFixed(2);
-});
-
-modeSub.subscribe(msg => {
-  const badge = document.getElementById('modeBadge');
-  if (msg.data === 1) {
-    badge.textContent = 'CMD';
-    badge.className = 'badge cmd';
-  } else {
-    badge.textContent = 'RC';
-    badge.className = 'badge rc';
-  }
-});
-
-const canvas = document.getElementById('joystickCanvas');
-const ctx = canvas.getContext('2d');
-let dragging = false;
-let joyX = 0, joyY = 0;
-const centerX = 100, centerY = 100, radius = 80;
+var canvas = document.getElementById('joystickCanvas');
+var ctx = canvas.getContext('2d');
+var dragging = false;
+var joyX = 0, joyY = 0;
+var centerX = 100, centerY = 100, radius = 80;
 
 function drawJoystick() {
   ctx.clearRect(0, 0, 200, 200);
@@ -159,27 +293,27 @@ function drawJoystick() {
 }
 
 function getPos(e) {
-  const rect = canvas.getBoundingClientRect();
-  const scaleX = canvas.width / rect.width;
-  const scaleY = canvas.height / rect.height;
-  const cx = (e.clientX || (e.touches && e.touches[0].clientX)) - rect.left;
-  const cy = (e.clientY || (e.touches && e.touches[0].clientY)) - rect.top;
+  var rect = canvas.getBoundingClientRect();
+  var scaleX = canvas.width / rect.width;
+  var scaleY = canvas.height / rect.height;
+  var cx = (e.clientX || (e.touches && e.touches[0].clientX)) - rect.left;
+  var cy = (e.clientY || (e.touches && e.touches[0].clientY)) - rect.top;
   return { x: (cx * scaleX - centerX) / radius, y: (cy * scaleY - centerY) / radius };
 }
 
 function publishCmd() {
-  const maxSpeed = parseFloat(document.getElementById('speedSlider').value);
+  var maxSpeed = parseFloat(document.getElementById('speedSlider').value);
   cmdVelPub.publish({
     linear: { x: -joyY * maxSpeed, y: 0, z: 0 },
     angular: { x: 0, y: 0, z: joyX * maxSpeed }
   });
 }
 
-let cmdInterval = null;
+var cmdInterval = null;
 
-canvas.addEventListener('mousedown', e => {
+canvas.addEventListener('mousedown', function(e) {
   dragging = true;
-  const p = getPos(e);
+  var p = getPos(e);
   joyX = Math.max(-1, Math.min(1, p.x));
   joyY = Math.max(-1, Math.min(1, p.y));
   drawJoystick();
@@ -187,15 +321,15 @@ canvas.addEventListener('mousedown', e => {
   cmdInterval = setInterval(publishCmd, 100);
 });
 
-window.addEventListener('mousemove', e => {
+window.addEventListener('mousemove', function(e) {
   if (!dragging) return;
-  const p = getPos(e);
+  var p = getPos(e);
   joyX = Math.max(-1, Math.min(1, p.x));
   joyY = Math.max(-1, Math.min(1, p.y));
   drawJoystick();
 });
 
-window.addEventListener('mouseup', () => {
+window.addEventListener('mouseup', function() {
   if (!dragging) return;
   dragging = false;
   joyX = 0; joyY = 0;
@@ -204,10 +338,10 @@ window.addEventListener('mouseup', () => {
   cmdVelPub.publish({ linear: { x: 0, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 } });
 });
 
-canvas.addEventListener('touchstart', e => {
+canvas.addEventListener('touchstart', function(e) {
   e.preventDefault();
   dragging = true;
-  const p = getPos(e);
+  var p = getPos(e);
   joyX = Math.max(-1, Math.min(1, p.x));
   joyY = Math.max(-1, Math.min(1, p.y));
   drawJoystick();
@@ -215,16 +349,16 @@ canvas.addEventListener('touchstart', e => {
   cmdInterval = setInterval(publishCmd, 100);
 });
 
-canvas.addEventListener('touchmove', e => {
+canvas.addEventListener('touchmove', function(e) {
   e.preventDefault();
   if (!dragging) return;
-  const p = getPos(e);
+  var p = getPos(e);
   joyX = Math.max(-1, Math.min(1, p.x));
   joyY = Math.max(-1, Math.min(1, p.y));
   drawJoystick();
 });
 
-canvas.addEventListener('touchend', e => {
+canvas.addEventListener('touchend', function(e) {
   e.preventDefault();
   dragging = false;
   joyX = 0; joyY = 0;
@@ -233,11 +367,11 @@ canvas.addEventListener('touchend', e => {
   cmdVelPub.publish({ linear: { x: 0, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 } });
 });
 
-document.getElementById('emergencyBtn').addEventListener('click', () => {
+document.getElementById('emergencyBtn').addEventListener('click', function() {
   cmdVelPub.publish({ linear: { x: 0, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 } });
 });
 
-document.getElementById('speedSlider').addEventListener('input', e => {
+document.getElementById('speedSlider').addEventListener('input', function(e) {
   document.getElementById('speedLabel').textContent = parseFloat(e.target.value).toFixed(2);
 });
 

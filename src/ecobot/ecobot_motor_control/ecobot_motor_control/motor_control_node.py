@@ -1,3 +1,11 @@
+"""
+ROS 2 node for ecobot motor control via serial interface.
+
+Receives ``/cmd_vel`` velocity commands, converts them to per-motor RPM using
+differential-drive kinematics, sends command packets over a serial port to the
+motor driver, and publishes odometry, joint states, and run-mode information.
+"""
+
 import math
 import time
 import threading
@@ -19,6 +27,13 @@ from ecobot_motor_control.kinematics import (
 
 
 class MotorControlNode(Node):
+    """
+    ROS 2 node that drives a differential-drive ecobot platform.
+
+    Subscribes to ``/cmd_vel`` (Twist), converts to left/right RPM, sends
+    serial commands, and reads back encoder feedback to publish ``/odom``,
+    ``/joint_states``, ``/run_mode``, and the odom→base_footprint transform.
+    """
     def __init__(self):
         super().__init__('motor_control_node')
 
@@ -81,6 +96,13 @@ class MotorControlNode(Node):
         self.open_serial()
 
     def open_serial(self):
+        """
+        Open (or reopen) the serial port connection.
+
+        Closes any existing connection first, then attempts to open the port
+        with the configured baudrate.  On failure, logs a warning (once) and
+        schedules a background reconnect timer.
+        """
         with self.serial_lock:
             if self.serial_conn and self.serial_conn.is_open:
                 try:
@@ -105,16 +127,35 @@ class MotorControlNode(Node):
                 self.schedule_reconnect()
 
     def schedule_reconnect(self):
+        """Schedule a periodic retry timer that calls :meth:`open_serial` every 3 seconds."""
         if self.serial_reconnect_timer is None:
             self.serial_reconnect_timer = self.create_timer(3.0, self.open_serial)
 
     def cmd_vel_callback(self, msg: Twist):
+        """
+        Store the latest commanded linear-x and angular-z speeds.
+
+        Parameters
+        ----------
+        msg : Twist
+            Incoming velocity command.  Only ``linear.x`` and ``angular.z``
+            are used.
+        """
         with self.cmd_lock:
             self.cmd_linear = msg.linear.x
             self.cmd_angular = msg.angular.z
             self.cmd_vel_stamp = time.time()
 
     def read_serial(self):
+        """
+        Read and decode one packet from the serial port.
+
+        Returns
+        -------
+        bytes or None
+            COBS-decoded raw packet data, or ``None`` if no valid packet was
+            available or the serial port is disconnected.
+        """
         with self.serial_lock:
             if self.serial_conn is None or not self.serial_conn.is_open:
                 return None
@@ -130,6 +171,19 @@ class MotorControlNode(Node):
                 return None
 
     def write_serial(self, data: bytes):
+        """
+        COBS-encode *data* and write it to the serial port.
+
+        Parameters
+        ----------
+        data : bytes
+            Raw (unencoded) packet payload to send.
+
+        Returns
+        -------
+        bool
+            ``True`` if the write succeeded, ``False`` otherwise.
+        """
         with self.serial_lock:
             if self.serial_conn is None or not self.serial_conn.is_open:
                 return False
@@ -143,6 +197,14 @@ class MotorControlNode(Node):
                 return False
 
     def control_loop(self):
+        """
+        Periodic control-loop callback (timer-driven).
+
+        Converts the most recent ``/cmd_vel`` to per-motor RPM, sends a
+        command packet, reads encoder feedback, and updates odometry.
+        Commands are zeroed if the last velocity message is older than
+        ``cmd_vel_timeout``.
+        """
         now = time.time()
         dt = now - self.last_loop_time
         self.last_loop_time = now
@@ -174,6 +236,15 @@ class MotorControlNode(Node):
             self.process_encoder_data(dt)
 
     def process_encoder_data(self, dt: float):
+        """
+        Publish joint states and update odometry from encoder counts.
+
+        Parameters
+        ----------
+        dt : float
+            Time delta (seconds) since the last encoder reading.  Used to
+            compute velocities from encoder deltas.
+        """
         mode_msg = UInt8()
         mode_msg.data = self.run_mode
         self.run_mode_pub.publish(mode_msg)
@@ -211,6 +282,16 @@ class MotorControlNode(Node):
         self.prev_encoder_r = self.encoder_r
 
     def publish_odom(self, linear_x: float, angular_z: float):
+        """
+        Publish an odometry message and the odom→base_footprint transform.
+
+        Parameters
+        ----------
+        linear_x : float
+            Current forward velocity (m/s).
+        angular_z : float
+            Current angular velocity (rad/s).
+        """
         stamp = self.get_clock().now().to_msg()
 
         qz = math.sin(self.pose_yaw / 2.0)
@@ -240,6 +321,7 @@ class MotorControlNode(Node):
         self.tf_broadcaster.sendTransform(tf_msg)
 
     def destroy_node(self):
+        """Close the serial connection, then call the parent cleanup."""
         with self.serial_lock:
             if self.serial_conn and self.serial_conn.is_open:
                 self.serial_conn.close()
@@ -247,6 +329,11 @@ class MotorControlNode(Node):
 
 
 def main(args=None):
+    """
+    Entry point: initialise rclpy, create the node, and spin.
+
+    Shuts down cleanly on keyboard interrupt.
+    """
     rclpy.init(args=args)
     node = MotorControlNode()
     try:

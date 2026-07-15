@@ -124,25 +124,38 @@ local_costmap:
       width: 3
       height: 3
       resolution: 0.05
-      footprint: "[[-0.15, -0.15], [-0.15, 0.15], [0.15, 0.15], [0.15, -0.15]]"
+      footprint: "[[-0.15, -0.25], [-0.15, 0.25], [0.15, 0.25], [0.15, -0.25]]"
       plugins:
         - obstacle_layer
         - inflation_layer
       obstacle_layer:
         plugin: nav2_costmap_2d::ObstacleLayer
         enabled: True
-        obstacle_range: 2.5
-        raytrace_range: 3.0
-        observation_sources: scan
+        obstacle_range: 3.0
+        raytrace_range: 3.5
+        observation_sources: scan pointcloud
         scan:
           topic: /scan
-          max_obstacle_height: 0.5
+          max_obstacle_height: 1.0
           clearing: True
           marking: True
+          min_obstacle_height: 0.05
+          obstacle_max_range: 3.0
+          obstacle_min_range: 0.16
+          inf_is_valid: false
+        pointcloud:
+          topic: /camera/depth/points
+          max_obstacle_height: 1.0
+          min_obstacle_height: 0.05
+          clearing: True
+          marking: True
+          obstacle_max_range: 3.0
+          obstacle_min_range: 0.16
+          inf_is_valid: false
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
-        cost_scaling_factor: 5.0
-        inflation_radius: 0.3
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.25
 
 global_costmap:
   global_costmap:
@@ -153,7 +166,7 @@ global_costmap:
       width: 20
       height: 20
       resolution: 0.05
-      footprint: "[[-0.15, -0.15], [-0.15, 0.15], [0.15, 0.15], [0.15, -0.15]]"
+      footprint: "[[-0.15, -0.25], [-0.15, 0.25], [0.15, 0.25], [0.15, -0.25]]"
       plugins:
         - static_layer
         - obstacle_layer
@@ -166,16 +179,29 @@ global_costmap:
         enabled: True
         obstacle_range: 3.0
         raytrace_range: 3.5
-        observation_sources: scan
+        observation_sources: scan pointcloud
         scan:
           topic: /scan
-          max_obstacle_height: 0.5
+          max_obstacle_height: 1.0
+          min_obstacle_height: 0.05
           clearing: True
           marking: True
+          obstacle_max_range: 3.0
+          obstacle_min_range: 0.16
+          inf_is_valid: false
+        pointcloud:
+          topic: /camera/depth/points
+          max_obstacle_height: 1.0
+          min_obstacle_height: 0.05
+          clearing: True
+          marking: True
+          obstacle_max_range: 3.0
+          obstacle_min_range: 0.16
+          inf_is_valid: false
       inflation_layer:
         plugin: nav2_costmap_2d::InflationLayer
-        cost_scaling_factor: 5.0
-        inflation_radius: 0.3
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.25
 
 map_server:
   ros__parameters:
@@ -187,9 +213,45 @@ planner_server:
     planner_plugins:
       - GridBased
     GridBased:
-      plugin: nav2_navfn_planner::NavfnPlanner
+      plugin: nav2_smac_planner::SmacPlannerHybrid
       tolerance: 0.15
-      use_astar: false
+      downsample_costmap: false
+      downsampler:
+        plugin: nav2_costmap_2d::CostmapDownsampler
+      downsample_factor: 1
+      allow_unknown: true
+      max_iterations: 100000
+      max_on_approach_iterations: 1000
+      max_planning_time: 5.0
+      motion_model_for_search: REEDS_SHEPP
+      angle_quantization_bins: 72
+      lookup_table_size: 20.0
+      minimum_turning_radius: 0.25
+      reverse_penalty: 2.1
+      change_penalty: 0.05
+      non_straight_penalty: 1.2
+      cost_penalty: 2.0
+      retrospective_penalty: 0.015
+      analytic_expansion_ratio: 3.5
+      analytic_expansion_max_length: 3.0
+      analytic_expansion_max_cost: 200.0
+      analytic_expansion_max_cost_override: false
+      smooth_path: true
+      smoother:
+        plugin: nav2_smac_planner::Smoother
+        w_data: 0.2
+        w_smooth: 0.4
+        tolerance: 1.0e-10
+        max_iterations: 500
+        do_refinement: true
+        refinement_num: 2
+      ceres_options:
+        max_num_iterations: 50
+        max_solver_time: 2.0
+        num_threads: 4
+        minimizer_progress_to_stdout: false
+        parameter_tolerance: 1.0e-7
+      debug_visualizations: false
 
 behavior_server:
   ros__parameters:

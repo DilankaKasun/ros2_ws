@@ -1,0 +1,263 @@
+import math
+import time
+import threading
+import serial
+import rclpy
+from rclpy.node import Node
+from geometry_msgs.msg import Twist, TransformStamped
+from nav_msgs.msg import Odometry
+from sensor_msgs.msg import JointState
+from std_msgs.msg import UInt8
+from tf2_ros import TransformBroadcaster
+
+from ecobot_motor_control.serial_protocol import (
+    build_send_packet, parse_receive_packet, cobs_encode, cobs_decode, PACKET_SIZE
+)
+from ecobot_motor_control.kinematics import (
+    twist_to_rpm, encoder_delta_to_twist, CUGOV4_PARAMS
+)
+
+
+class MotorControlNode(Node):
+    def __init__(self):
+        super().__init__('motor_control_node')
+
+        self.declare_parameter('serial_port', '/dev/ttyACM0')
+        self.declare_parameter('baudrate', 115200)
+        self.declare_parameter('control_frequency', 10.0)
+        self.declare_parameter('cmd_vel_timeout', 0.5)
+        self.declare_parameter('max_rpm', 130.0)
+        self.declare_parameter('product_id', 1)
+        self.declare_parameter('odom_frame_id', 'odom')
+        self.declare_parameter('base_frame_id', 'base_footprint')
+
+        self.serial_port_name = self.get_parameter('serial_port').value
+        self.baudrate = self.get_parameter('baudrate').value
+        self.control_freq = self.get_parameter('control_frequency').value
+        self.cmd_vel_timeout = self.get_parameter('cmd_vel_timeout').value
+        self.max_rpm = self.get_parameter('max_rpm').value
+        self.product_id = self.get_parameter('product_id').value
+        self.odom_frame = self.get_parameter('odom_frame_id').value
+        self.base_frame = self.get_parameter('base_frame_id').value
+
+        self.params = CUGOV4_PARAMS
+
+        self.cmd_linear = 0.0
+        self.cmd_angular = 0.0
+        self.cmd_vel_stamp = 0.0
+        self.cmd_lock = threading.Lock()
+
+        self.encoder_l = 0
+        self.encoder_r = 0
+        self.prev_encoder_l = 0
+        self.prev_encoder_r = 0
+        self.first_encoder = True
+        self.run_mode = 1
+
+        self.pose_x = 0.0
+        self.pose_y = 0.0
+        self.pose_yaw = 0.0
+
+        self.serial_conn = None
+        self.serial_lock = threading.Lock()
+        self.serial_reconnect_timer = None
+        self.reconnect_count = 0
+
+        self.last_loop_time = time.time()
+
+        self.cmd_vel_sub = self.create_subscription(
+            Twist, '/cmd_vel', self.cmd_vel_callback, 10)
+
+        self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
+        self.joint_state_pub = self.create_publisher(JointState, '/joint_states', 10)
+        self.run_mode_pub = self.create_publisher(UInt8, '/run_mode', 10)
+
+        self.tf_broadcaster = TransformBroadcaster(self)
+
+        self.control_timer = self.create_timer(1.0 / self.control_freq, self.control_loop)
+
+        self.get_logger().info(
+            f'ecobot motor controller starting — port={self.serial_port_name}')
+        self.open_serial()
+
+    def open_serial(self):
+        with self.serial_lock:
+            if self.serial_conn and self.serial_conn.is_open:
+                try:
+                    self.serial_conn.close()
+                except Exception:
+                    pass
+            try:
+                self.serial_conn = serial.Serial(
+                    port=self.serial_port_name,
+                    baudrate=self.baudrate,
+                    timeout=0.05,
+                )
+                self.get_logger().info(f'serial port {self.serial_port_name} opened')
+                self.reconnect_count = 0
+            except serial.SerialException:
+                self.reconnect_count += 1
+                if self.reconnect_count == 1:
+                    self.get_logger().warn(
+                        f'serial port {self.serial_port_name} not available — '
+                        f'will retry in background')
+                self.serial_conn = None
+                self.schedule_reconnect()
+
+    def schedule_reconnect(self):
+        if self.serial_reconnect_timer is None:
+            self.serial_reconnect_timer = self.create_timer(3.0, self.open_serial)
+
+    def cmd_vel_callback(self, msg: Twist):
+        with self.cmd_lock:
+            self.cmd_linear = msg.linear.x
+            self.cmd_angular = msg.angular.z
+            self.cmd_vel_stamp = time.time()
+
+    def read_serial(self):
+        with self.serial_lock:
+            if self.serial_conn is None or not self.serial_conn.is_open:
+                return None
+            try:
+                raw = self.serial_conn.read_until(b'\x00')
+                if not raw:
+                    return None
+                return cobs_decode(raw)
+            except serial.SerialException:
+                self.get_logger().warning('serial read error')
+                self.serial_conn = None
+                self.schedule_reconnect()
+                return None
+
+    def write_serial(self, data: bytes):
+        with self.serial_lock:
+            if self.serial_conn is None or not self.serial_conn.is_open:
+                return False
+            try:
+                encoded = cobs_encode(data)
+                self.serial_conn.write(encoded)
+                return True
+            except serial.SerialException:
+                self.serial_conn = None
+                self.schedule_reconnect()
+                return False
+
+    def control_loop(self):
+        now = time.time()
+        dt = now - self.last_loop_time
+        self.last_loop_time = now
+        if dt <= 0 or dt > 1.0:
+            dt = 1.0 / self.control_freq
+
+        with self.cmd_lock:
+            if now - self.cmd_vel_stamp > self.cmd_vel_timeout:
+                l_rpm = 0.0
+                r_rpm = 0.0
+            else:
+                l_rpm, r_rpm = twist_to_rpm(
+                    self.cmd_linear, self.cmd_angular, self.params)
+                l_rpm = max(-self.max_rpm, min(self.max_rpm, l_rpm))
+                r_rpm = max(-self.max_rpm, min(self.max_rpm, r_rpm))
+
+        packet = build_send_packet(l_rpm, r_rpm, self.product_id)
+        self.write_serial(packet)
+
+        raw = self.read_serial()
+        if raw is not None:
+            try:
+                fb = parse_receive_packet(raw)
+            except ValueError:
+                return
+            self.run_mode = fb['run_mode']
+            self.encoder_l = fb['encoder_l']
+            self.encoder_r = fb['encoder_r']
+            self.process_encoder_data(dt)
+
+    def process_encoder_data(self, dt: float):
+        mode_msg = UInt8()
+        mode_msg.data = self.run_mode
+        self.run_mode_pub.publish(mode_msg)
+
+        dist_per_count = 2.0 * math.pi / (
+            self.params.encoder_resolution * self.params.reduction_ratio)
+        joint_msg = JointState()
+        joint_msg.header.stamp = self.get_clock().now().to_msg()
+        joint_msg.name = ['left_crawler_joint', 'right_crawler_joint']
+        joint_msg.position = [
+            self.encoder_l * dist_per_count,
+            self.encoder_r * dist_per_count,
+        ]
+        self.joint_state_pub.publish(joint_msg)
+
+        if self.first_encoder:
+            self.first_encoder = False
+            self.prev_encoder_l = self.encoder_l
+            self.prev_encoder_r = self.encoder_r
+            return
+
+        diff_l = self.encoder_l - self.prev_encoder_l
+        diff_r = self.encoder_r - self.prev_encoder_r
+
+        linear_x, angular_z = encoder_delta_to_twist(
+            diff_l, diff_r, dt, self.params)
+
+        self.pose_yaw += angular_z * dt
+        self.pose_x += linear_x * dt * math.cos(self.pose_yaw)
+        self.pose_y += linear_x * dt * math.sin(self.pose_yaw)
+
+        self.publish_odom(linear_x, angular_z)
+
+        self.prev_encoder_l = self.encoder_l
+        self.prev_encoder_r = self.encoder_r
+
+    def publish_odom(self, linear_x: float, angular_z: float):
+        stamp = self.get_clock().now().to_msg()
+
+        qz = math.sin(self.pose_yaw / 2.0)
+        qw = math.cos(self.pose_yaw / 2.0)
+
+        odom = Odometry()
+        odom.header.stamp = stamp
+        odom.header.frame_id = self.odom_frame
+        odom.child_frame_id = self.base_frame
+        odom.pose.pose.position.x = self.pose_x
+        odom.pose.pose.position.y = self.pose_y
+        odom.pose.pose.position.z = 0.0
+        odom.pose.pose.orientation.z = qz
+        odom.pose.pose.orientation.w = qw
+        odom.twist.twist.linear.x = linear_x
+        odom.twist.twist.angular.z = angular_z
+        self.odom_pub.publish(odom)
+
+        tf_msg = TransformStamped()
+        tf_msg.header.stamp = stamp
+        tf_msg.header.frame_id = self.odom_frame
+        tf_msg.child_frame_id = self.base_frame
+        tf_msg.transform.translation.x = self.pose_x
+        tf_msg.transform.translation.y = self.pose_y
+        tf_msg.transform.rotation.z = qz
+        tf_msg.transform.rotation.w = qw
+        self.tf_broadcaster.sendTransform(tf_msg)
+
+    def destroy_node(self):
+        with self.serial_lock:
+            if self.serial_conn and self.serial_conn.is_open:
+                self.serial_conn.close()
+        super().destroy_node()
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = MotorControlNode()
+    try:
+        rclpy.spin(node)
+    except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
+        pass
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()

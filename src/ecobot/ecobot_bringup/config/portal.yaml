@@ -1,0 +1,15 @@
+version: 1
+video_tracks:
+  - name: "cam"
+    codec: "MJPEG"
+    quality: 80
+state_schema:
+  - name: "linear_velocity"
+    dtype: "F32"
+  - name: "angular_velocity"
+    dtype: "F32"
+action_schema:
+  - name: "linear_velocity"
+    dtype: "F32"
+  - name: "angular_velocity"
+    dtype: "F32"

@@ -10,7 +10,7 @@ setup(
         ('share/ament_index/resource_index/packages', [f'resource/{package_name}']),
         (f'share/{package_name}', ['package.xml']),
         (f'share/{package_name}/launch', ['launch/navigation.launch.py']),
-        (f'share/{package_name}/config', ['config/nav2_params.yaml']),
+        (f'share/{package_name}/config', ['config/nav2_params.yaml', 'config/nav2_params_mapless.yaml']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

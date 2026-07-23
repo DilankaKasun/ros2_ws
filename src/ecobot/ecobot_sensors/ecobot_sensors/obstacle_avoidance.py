@@ -1,10 +1,11 @@
-import io
+import json
 import threading
 import time
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Image
+from std_msgs.msg import String
 from cv_bridge import CvBridge
 import cv2
 import numpy as np
@@ -12,7 +13,6 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 
 
 class ObstacleMJPEGHandler(BaseHTTPRequestHandler):
-    server_node = None
     frame = None
     frame_lock = threading.Lock()
 
@@ -53,25 +53,33 @@ class ObstacleAvoidance(Node):
     def __init__(self):
         super().__init__('obstacle_avoidance')
 
-        self.declare_parameter('safe_distance', 0.8)
-        self.declare_parameter('warn_distance', 1.2)
+        self.declare_parameter('safe_distance', 0.9)
+        self.declare_parameter('warn_distance', 1.1)
         self.declare_parameter('zones', 5)
         self.declare_parameter('max_linear_speed', 0.3)
         self.declare_parameter('max_angular_speed', 0.5)
+        self.declare_parameter('reverse_speed', -0.2)
+        self.declare_parameter('reverse_duration', 1.5)
+        self.declare_parameter('turn_duration', 2.0)
         self.declare_parameter('show_viewer', False)
         self.declare_parameter('mjpeg_port', 8083)
         self.declare_parameter('depth_topic', '/camera/depth/image_raw')
         self.declare_parameter('depth_scale', 0.001)
+        self.declare_parameter('tof_threshold', 0.5)
 
         self.safe_distance = self.get_parameter('safe_distance').value
         self.warn_distance = self.get_parameter('warn_distance').value
         self.num_zones = self.get_parameter('zones').value
         self.max_linear = self.get_parameter('max_linear_speed').value
         self.max_angular = self.get_parameter('max_angular_speed').value
+        self.reverse_speed = self.get_parameter('reverse_speed').value
+        self.reverse_duration = self.get_parameter('reverse_duration').value
+        self.turn_duration = self.get_parameter('turn_duration').value
         self.show_viewer = self.get_parameter('show_viewer').value
         mjpeg_port = self.get_parameter('mjpeg_port').value
         depth_topic = self.get_parameter('depth_topic').value
         self.depth_scale = self.get_parameter('depth_scale').value
+        self.tof_threshold = self.get_parameter('tof_threshold').value
 
         self.bridge = CvBridge()
         self.latest_depth = None
@@ -94,12 +102,28 @@ class ObstacleAvoidance(Node):
         self.nav_vel_timeout = 1.0
         self.last_nav_vel_time = self.get_clock().now()
 
+        self.goto_vel_sub = self.create_subscription(
+            Twist, '/goto_cmd_vel', self.goto_vel_cb, 10)
+        self.latest_goto_vel = Twist()
+        self.has_goto_vel = False
+        self.goto_vel_timeout = 1.0
+        self.last_goto_vel_time = self.get_clock().now()
+
         self.depth_sub = self.create_subscription(
             Image, depth_topic, self.depth_cb, 10)
 
+        self.tof_sub = self.create_subscription(
+            String, '/ecobot/tof_ranges', self.tof_cb, 10)
+        self.latest_tof = None
+
+        self.escape_state = 'NONE'
+        self.escape_start_time = None
+        self.escape_turn_dir = 'LEFT'
+
         self.get_logger().info(
             f'obstacle avoidance started — depth_topic={depth_topic} '
-            f'safe<{self.safe_distance}m warn<{self.warn_distance}m')
+            f'safe<{self.safe_distance}m warn<{self.warn_distance}m '
+            f'tof<{self.tof_threshold}m')
 
         self.timer = self.create_timer(1.0 / 10.0, self.avoidance_loop)
 
@@ -108,6 +132,11 @@ class ObstacleAvoidance(Node):
         self.has_nav_vel = True
         self.last_nav_vel_time = self.get_clock().now()
 
+    def goto_vel_cb(self, msg):
+        self.latest_goto_vel = msg
+        self.has_goto_vel = True
+        self.last_goto_vel_time = self.get_clock().now()
+
     def depth_cb(self, msg: Image):
         try:
             depth_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
@@ -115,6 +144,13 @@ class ObstacleAvoidance(Node):
                 self.latest_depth = depth_image.copy()
         except Exception as e:
             self.get_logger().warn(f'depth callback error: {e}')
+
+    def tof_cb(self, msg: String):
+        try:
+            data = json.loads(msg.data)
+            self.latest_tof = data.get('ranges_m')
+        except Exception:
+            pass
 
     def zone_distances(self, depth_image):
         h, w = depth_image.shape
@@ -127,18 +163,12 @@ class ObstacleAvoidance(Node):
                 np.mean(valid) * self.depth_scale if len(valid) > 50 else 99.0)
         return zones
 
-    def nav_cmd(self, zones):
-        mid = self.num_zones // 2
-        c = zones[mid]
-        l = min(zones[:mid]) if zones[:mid] else 99.0
-        r = min(zones[mid + 1:]) if zones[mid + 1:] else 99.0
-        if c < self.safe_distance:
-            return 'TURN LEFT' if l > r else 'TURN RIGHT'
-        if l < self.safe_distance:
-            return 'TURN RIGHT'
-        if r < self.safe_distance:
-            return 'TURN LEFT'
-        return 'FORWARD'
+    def speed_ratio(self, min_dist):
+        if min_dist >= self.warn_distance:
+            return 1.0
+        if min_dist <= 0.2:
+            return 0.05
+        return (min_dist - 0.2) / (self.warn_distance - 0.2)
 
     def avoidance_loop(self):
         nav2_expired = (
@@ -146,53 +176,128 @@ class ObstacleAvoidance(Node):
         ).nanoseconds / 1e9 > self.nav_vel_timeout
         nav2_active = self.has_nav_vel and not nav2_expired
 
+        goto_expired = (
+            self.get_clock().now() - self.last_goto_vel_time
+        ).nanoseconds / 1e9 > self.goto_vel_timeout
+        goto_active = self.has_goto_vel and not goto_expired
+
         with self.depth_lock:
             depth_available = self.latest_depth is not None
             if depth_available:
                 depth_image = self.latest_depth.copy()
 
-        cmd = 'FORWARD'
+        cmd_source_active = nav2_active or goto_active
+        if goto_active and not nav2_active:
+            base_cmd = self.latest_goto_vel
+        else:
+            base_cmd = self.latest_nav_vel if nav2_active else Twist()
+
         zones = None
-
-        if depth_available:
-            zones = self.zone_distances(depth_image)
-            cmd = self.nav_cmd(zones)
-
-        twist = Twist()
-
-        if cmd == 'FORWARD':
-            if nav2_active:
-                twist = self.latest_nav_vel
-            elif depth_available:
-                twist.linear.x = self.max_linear * 0.6
-            else:
-                twist.linear.x = self.max_linear * 0.3
-        elif cmd == 'TURN LEFT':
-            if nav2_active:
-                twist = self.latest_nav_vel
-                twist.angular.z = self.max_angular
-                twist.linear.x = max(twist.linear.x * 0.3, 0.05)
-            else:
-                twist.angular.z = self.max_angular
-                twist.linear.x = self.max_linear * 0.3
-        elif cmd == 'TURN RIGHT':
-            if nav2_active:
-                twist = self.latest_nav_vel
-                twist.angular.z = -self.max_angular
-                twist.linear.x = max(twist.linear.x * 0.3, 0.05)
-            else:
-                twist.angular.z = -self.max_angular
-                twist.linear.x = self.max_linear * 0.3
-
-        self.cmd_pub.publish(twist)
+        h, w = 480, 640
 
         if not depth_available:
-            return
+            tof = self.latest_tof
+            if tof is not None and any(v is not None for v in tof):
+                zones = [99.0] * self.num_zones
+                if tof[0] is not None and tof[0] < self.tof_threshold:
+                    for i in range(self.num_zones // 2):
+                        zones[i] = tof[0]
+                if tof[1] is not None and tof[1] < self.tof_threshold:
+                    for i in range(self.num_zones // 2 + 1, self.num_zones):
+                        zones[i] = tof[1]
+                depth_image = np.zeros((h, w), dtype=np.float32)
+            else:
+                twist = Twist()
+                if cmd_source_active:
+                    twist = base_cmd
+                else:
+                    twist.linear.x = self.max_linear * 0.3
+                self.cmd_pub.publish(twist)
+                return
+        else:
+            zones = self.zone_distances(depth_image)
+            h, w = depth_image.shape
+            tof = self.latest_tof
+            if tof is not None:
+                if tof[0] is not None and tof[0] < self.tof_threshold:
+                    for i in range(self.num_zones // 2):
+                        zones[i] = min(zones[i], tof[0])
+                if tof[1] is not None and tof[1] < self.tof_threshold:
+                    for i in range(self.num_zones // 2 + 1, self.num_zones):
+                        zones[i] = min(zones[i], tof[1])
+        mid = self.num_zones // 2
+        min_dist = min(zones)
+        all_blocked = all(d < self.warn_distance for d in zones)
+        left_avg = np.mean(zones[:mid]) if zones[:mid] else 99.0
+        right_avg = np.mean(zones[mid + 1:]) if zones[mid + 1:] else 99.0
+
+        cmd = 'FORWARD'
+        sr = self.speed_ratio(min_dist)
+
+        if self.escape_state == 'NONE' and all_blocked:
+            self.escape_state = 'REVERSE'
+            self.escape_start_time = self.get_clock().now()
+            self.escape_turn_dir = 'RIGHT' if left_avg > right_avg else 'LEFT'
+            self.get_logger().info(f'all blocked — reversing, then turning {self.escape_turn_dir}')
+
+        if self.escape_state == 'REVERSE':
+            elapsed = (self.get_clock().now() - self.escape_start_time).nanoseconds / 1e9
+            twist = Twist()
+            twist.linear.x = self.reverse_speed
+            twist.angular.z = self.max_angular * 0.6 * (
+                1.0 if self.escape_turn_dir == 'LEFT' else -1.0)
+            cmd = f'REVERSE {self.escape_turn_dir}'
+            if elapsed >= self.reverse_duration:
+                self.escape_state = 'TURN'
+                self.escape_start_time = self.get_clock().now()
+        elif self.escape_state == 'TURN':
+            elapsed = (self.get_clock().now() - self.escape_start_time).nanoseconds / 1e9
+            twist = Twist()
+            twist.angular.z = self.max_angular * (
+                1.0 if self.escape_turn_dir == 'LEFT' else -1.0)
+            twist.linear.x = self.max_linear * 0.2
+            cmd = f'TURN {self.escape_turn_dir}'
+            if elapsed >= self.turn_duration:
+                self.escape_state = 'NONE'
+        else:
+            any_danger = any(d < self.safe_distance for d in zones)
+            if any_danger:
+                if min(zones[:mid]) < min(zones[mid + 1:]):
+                    cmd = 'TURN RIGHT'
+                else:
+                    cmd = 'TURN LEFT'
+
+            if cmd == 'FORWARD':
+                if cmd_source_active:
+                    twist = base_cmd
+                    twist.linear.x *= sr
+                else:
+                    twist = Twist()
+                    twist.linear.x = self.max_linear * 0.6 * sr
+            elif cmd == 'TURN LEFT':
+                if cmd_source_active:
+                    twist = base_cmd
+                    twist.angular.z = self.max_angular
+                    twist.linear.x = max(twist.linear.x * 0.3 * sr, 0.02)
+                else:
+                    twist = Twist()
+                    twist.angular.z = self.max_angular
+                    twist.linear.x = self.max_linear * 0.3 * sr
+            else:
+                if cmd_source_active:
+                    twist = base_cmd
+                    twist.angular.z = -self.max_angular
+                    twist.linear.x = max(twist.linear.x * 0.3 * sr, 0.02)
+                else:
+                    twist = Twist()
+                    twist.angular.z = -self.max_angular
+                    twist.linear.x = self.max_linear * 0.3 * sr
+
+        self.cmd_pub.publish(twist)
 
         colored = cv2.applyColorMap(
             cv2.convertScaleAbs(depth_image, alpha=0.03),
             cv2.COLORMAP_JET)
-        h, w = colored.shape[:2]
         zw = w // self.num_zones
         for i in range(self.num_zones):
             x1, x2 = i * zw, (i + 1) * zw
@@ -207,14 +312,61 @@ class ObstacleAvoidance(Node):
             label = f'{d:.1f}m' if d < 10 else '---'
             cv2.putText(colored, label, (x1 + 4, h - 8),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, col, 1)
+
+        cx, cy = w // 2, h // 2 + 30
+        if 'REVERSE' in cmd:
+            arrow_col = (0, 0, 255)
+            cv2.arrowedLine(colored, (cx, cy - 40), (cx, cy + 40), arrow_col, 4, tipLength=0.3)
+            dir_col = (0, 0, 255)
+            dir_sign = 1 if 'RIGHT' in cmd else -1
+            for r in range(20, 60, 15):
+                pts = np.array([
+                    [cx + int(dir_sign * r * np.cos(t)), cy + 40 + int(r * np.sin(t))]
+                    for t in np.linspace(0, np.pi / 3, 12)
+                ], np.int32).reshape((-1, 1, 2))
+                cv2.polylines(colored, [pts], False, (0, 0, 255), 2)
+        elif 'TURN' in cmd and self.escape_state == 'TURN':
+            arrow_col = (0, 200, 255)
+            dir_sign = 1 if 'RIGHT' in cmd else -1
+            for r in range(20, 60, 15):
+                pts = np.array([
+                    [cx + int(dir_sign * r * np.sin(t)), cy - int(r * np.cos(t))]
+                    for t in np.linspace(0, np.pi / 2, 14)
+                ], np.int32).reshape((-1, 1, 2))
+                cv2.polylines(colored, [pts], False, (0, 200, 255), 2)
+            cv2.arrowedLine(colored, (cx, cy), (cx + dir_sign * 50, cy - 30), (0, 200, 255), 4, tipLength=0.3)
+        elif cmd == 'FORWARD':
+            arrow_col = (0, int(255 * sr), 0)
+            cv2.arrowedLine(colored, (cx, cy + 40), (cx, cy - 40), arrow_col, 4, tipLength=0.3)
+        elif cmd == 'TURN LEFT':
+            arrow_col = (0, 200, 255)
+            cv2.ellipse(colored, (cx, cy), (50, 50), 0, 0, -90, arrow_col, 3)
+            cv2.arrowedLine(colored, (cx, cy - 50), (cx - 30, cy - 50), arrow_col, 3, tipLength=0.3)
+        elif cmd == 'TURN RIGHT':
+            arrow_col = (0, 200, 255)
+            cv2.ellipse(colored, (cx, cy), (50, 50), 0, 0, 90, arrow_col, 3)
+            cv2.arrowedLine(colored, (cx, cy - 50), (cx + 30, cy - 50), arrow_col, 3, tipLength=0.3)
+
+        cmd_label = cmd
+        if self.escape_state == 'NONE' and cmd == 'FORWARD':
+            cmd_label = f'FORWARD {min_dist:.1f}m'
+        elif cmd.startswith('TURN') and self.escape_state == 'NONE':
+            cmd_label = f'{cmd} {min_dist:.1f}m'
+
         cmd_colors = {
             'FORWARD': (0, 255, 0),
             'TURN LEFT': (0, 200, 255),
             'TURN RIGHT': (0, 200, 255),
         }
-        cc = cmd_colors.get(cmd, (255, 255, 255))
-        cv2.putText(colored, cmd, (w // 2 - 70, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.1, cc, 3)
+        for k in cmd_colors:
+            if cmd_label.startswith(k):
+                cc = cmd_colors[k]
+                break
+        else:
+            cc = (255, 255, 255)
+        cv2.putText(colored, cmd_label, (w // 2 - 90, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, cc, 3)
+
         _, jpg = cv2.imencode('.jpg', colored, [cv2.IMWRITE_JPEG_QUALITY, 70])
         with ObstacleMJPEGHandler.frame_lock:
             ObstacleMJPEGHandler.frame = jpg.tobytes()
@@ -237,7 +389,8 @@ def main(args=None):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

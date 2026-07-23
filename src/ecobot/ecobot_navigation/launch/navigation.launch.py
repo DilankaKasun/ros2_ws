@@ -1,37 +1,39 @@
 from launch import LaunchDescription
 from launch.conditions import IfCondition
 from launch_ros.actions import Node
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from ament_index_python.packages import get_package_share_directory
 import os
 
 
-def generate_launch_description():
-    nav2_params = os.path.join(
-        get_package_share_directory('ecobot_navigation'),
-        'config', 'nav2_params.yaml')
+def launch_setup(context, *args, **kwargs):
+    nav_share = get_package_share_directory('ecobot_navigation')
+    map_path = LaunchConfiguration('map').perform(context)
 
-    return LaunchDescription([
-        DeclareLaunchArgument('autostart', default_value='true'),
-        DeclareLaunchArgument('params_file', default_value=nav2_params),
-        DeclareLaunchArgument('map', default_value=''),
+    if map_path:
+        params_file = os.path.join(nav_share, 'config', 'nav2_params.yaml')
+    else:
+        params_file = os.path.join(nav_share, 'config', 'nav2_params_mapless.yaml')
 
+    return [
         Node(
             package='nav2_map_server',
             executable='map_server',
             name='map_server',
             output='screen',
-            parameters=[LaunchConfiguration('params_file')],
+            parameters=[params_file],
             condition=IfCondition(PythonExpression(
-                ['"', LaunchConfiguration('map'), '" != ""'])),
+                ['"', map_path, '" != ""'])),
         ),
         Node(
             package='nav2_amcl',
             executable='amcl',
             name='amcl',
             output='screen',
-            parameters=[LaunchConfiguration('params_file')],
+            parameters=[params_file],
+            condition=IfCondition(PythonExpression(
+                ['"', map_path, '" != ""'])),
         ),
         Node(
             package='nav2_lifecycle_manager',
@@ -41,10 +43,10 @@ def generate_launch_description():
             parameters=[{
                 'autostart': LaunchConfiguration('autostart'),
                 'node_names': PythonExpression([
-                    '["amcl", "controller_server", "planner_server", '
-                    '"behavior_server", "bt_navigator", "local_costmap", '
-                    '"global_costmap"] + (["map_server"] if "',
-                    LaunchConfiguration('map'), '" != "" else [])',
+                    '["controller_server", "planner_server", '
+                    '"behavior_server", "bt_navigator"]'
+                    ' + (["map_server", "amcl"] if "',
+                    map_path, '" != "" else [])',
                 ]),
             }],
         ),
@@ -53,7 +55,7 @@ def generate_launch_description():
             executable='controller_server',
             name='controller_server',
             output='screen',
-            parameters=[LaunchConfiguration('params_file')],
+            parameters=[params_file],
             remappings=[('/cmd_vel', '/nav_cmd_vel')],
         ),
         Node(
@@ -61,34 +63,28 @@ def generate_launch_description():
             executable='planner_server',
             name='planner_server',
             output='screen',
-            parameters=[LaunchConfiguration('params_file')],
+            parameters=[params_file],
         ),
         Node(
             package='nav2_behaviors',
             executable='behavior_server',
             name='behavior_server',
             output='screen',
-            parameters=[LaunchConfiguration('params_file')],
+            parameters=[params_file],
         ),
         Node(
             package='nav2_bt_navigator',
             executable='bt_navigator',
             name='bt_navigator',
             output='screen',
-            parameters=[LaunchConfiguration('params_file')],
+            parameters=[params_file],
         ),
-        Node(
-            package='nav2_costmap_2d',
-            executable='nav2_costmap_2d',
-            name='local_costmap',
-            output='screen',
-            parameters=[LaunchConfiguration('params_file')],
-        ),
-        Node(
-            package='nav2_costmap_2d',
-            executable='nav2_costmap_2d',
-            name='global_costmap',
-            output='screen',
-            parameters=[LaunchConfiguration('params_file')],
-        ),
+    ]
+
+
+def generate_launch_description():
+    return LaunchDescription([
+        DeclareLaunchArgument('autostart', default_value='true'),
+        DeclareLaunchArgument('map', default_value=''),
+        OpaqueFunction(function=launch_setup),
     ])

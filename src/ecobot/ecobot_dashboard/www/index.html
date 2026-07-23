@@ -32,6 +32,44 @@ button.emergency { background: #d50000; color: white; }
 button.emergency:hover { background: #ff1744; }
 input[type=range] { width: 100px; }
 .camera-grid { display: grid; grid-template-columns: 1.5fr 1fr; gap: 12px; align-items: start; }
+.det-grid { display: grid; grid-template-columns: 1.2fr 1fr; gap: 12px; align-items: start; }
+.det-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+.det-table th { text-align: left; color: #90a4ae; font-weight: normal; padding: 4px 6px; border-bottom: 1px solid #ffffff22; }
+.det-table td { padding: 4px 6px; border-bottom: 1px solid #ffffff10; font-family: 'Courier New', monospace; }
+.det-table tr:last-child td { border: none; }
+.det-empty { color: #90a4ae; text-align: center; }
+.det-table tbody tr.det-row { cursor: pointer; }
+.det-table tbody tr.det-row:hover { background: #ffffff12; }
+.det-table tbody tr.det-row.selected { background: #1e3a5f; }
+.goto-bar { display: flex; align-items: center; gap: 10px; margin-top: 10px; padding-top: 8px; border-top: 1px solid #ffffff15; }
+.goto-status { font-size: 0.85rem; color: #90a4ae; flex: 1; }
+.goto-status .goto-active { color: #00e676; font-weight: bold; }
+.goto-status .goto-problem { color: #ffab00; font-weight: bold; }
+button.goto-stop { background: #d50000; color: white; padding: 4px 12px; font-size: 0.8rem; display: none; }
+button.goto-stop:hover { background: #ff1744; }
+.goto-hint { font-size: 0.7rem; color: #90a4ae; margin-top: 6px; }
+.wp-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+.wp-table th { text-align: left; color: #90a4ae; font-weight: normal; padding: 4px 6px; border-bottom: 1px solid #ffffff22; }
+.wp-table td { padding: 4px 6px; border-bottom: 1px solid #ffffff10; font-family: 'Courier New', monospace; }
+.wp-table tbody tr { cursor: pointer; }
+.wp-table tbody tr:hover { background: #ffffff12; }
+.wp-table tbody tr.selected { background: #1e3a5f; }
+.wp-empty { color: #90a4ae; text-align: center; }
+.wp-btn { display: inline-block; padding: 2px 8px; cursor: pointer; color: #4fc3f7; font-size: 0.8rem; border: 1px solid #334; border-radius: 4px; margin-top: 6px; }
+.wp-btn:hover { background: #16213e; }
+.map-canvas { width: 100%; height: 300px; border: 1px solid #ffffff22; border-radius: 4px; background: #0d1b2a; }
+.map-legend { display: flex; gap: 12px; font-size: 0.7rem; margin-top: 4px; }
+.map-legend span { display: flex; align-items: center; gap: 4px; }
+.map-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.map-odom { background: #90a4ae; }
+.map-wp { background: #4fc3f7; }
+.map-det { background: #ffab00; }
+.tof-row { display: flex; gap: 16px; align-items: center; }
+.tof-block { flex: 1; }
+.tof-label { font-size: 0.75rem; color: #90a4ae; margin-bottom: 2px; }
+.tof-value { font-family: 'Courier New', monospace; font-size: 1.3rem; font-weight: bold; }
+.tof-bar-wrap { height: 10px; background: #0d1b2a; border-radius: 5px; overflow: hidden; margin-top: 4px; }
+.tof-bar { height: 100%; border-radius: 5px; transition: width 0.15s, background 0.15s; }
 
 .zone-bars { display: flex; gap: 4px; align-items: flex-end; padding: 4px 0; }
 .zone-bar { flex: 1; border-radius: 4px 4px 0 0; min-height: 8px; transition: height 0.2s, background 0.2s; position: relative; }
@@ -49,11 +87,15 @@ input[type=range] { width: 100px; }
 .ws-dot.on { background: #00e676; }
 .ws-dot.off { background: #ff1744; }
 
-@media (max-width: 700px) { .camera-grid { grid-template-columns: 1fr; } }
+@media (max-width: 700px) { .camera-grid { grid-template-columns: 1fr; } .det-grid { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
-<h1><span class="status-dot disconnected" id="statusDot"></span> ecobot</h1>
+<h1 style="display:flex;align-items:center;gap:10px"><span class="status-dot disconnected" id="statusDot"></span> ecobot
+  <span style="margin-left:auto;font-size:0.8rem;font-weight:normal">
+    <a href="/map3d" style="color:#4fc3f7;text-decoration:none;padding:4px 12px;border:1px solid #334;border-radius:4px">3D Map</a>
+  </span>
+</h1>
 
 <div class="camera-grid">
   <div class="card">
@@ -72,6 +114,66 @@ input[type=range] { width: 100px; }
       <h2>Velocity</h2>
       <div class="stat-row"><span class="stat-label">Linear</span><span class="stat-value" id="velLinear">0.00</span></div>
       <div class="stat-row"><span class="stat-label">Angular</span><span class="stat-value" id="velAngular">0.00</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="det-grid">
+  <div class="card">
+    <h2>Detection Feed</h2>
+    <canvas class="camera-frame" id="detectionCanvas" width="640" height="360"></canvas>
+  </div>
+  <div class="card">
+    <h2>Detected Objects <span class="badge cmd" id="detCount">0</span></h2>
+    <table class="det-table">
+      <thead>
+        <tr><th>Time</th><th>Class</th><th>Conf</th><th>Bounding Box</th></tr>
+      </thead>
+      <tbody id="detBody">
+        <tr><td colspan="4" class="det-empty">No objects detected</td></tr>
+      </tbody>
+    </table>
+    <div class="goto-hint">Click a row to drive to that object</div>
+    <div class="goto-bar">
+      <span class="goto-status" id="gotoStatus">Goto: IDLE</span>
+      <button class="goto-stop" id="gotoStopBtn">STOP</button>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Saved Locations <span class="badge cmd" id="wpCount">0</span></h2>
+  <table class="wp-table">
+    <thead><tr><th>Object</th><th>X</th><th>Y</th></tr></thead>
+    <tbody id="wpBody">
+      <tr><td colspan="3" class="wp-empty">No locations saved yet</td></tr>
+    </tbody>
+  </table>
+  <span class="wp-btn" onclick="clearWaypoints()" style="margin-top:8px">Clear All</span>
+</div>
+
+<div class="card">
+  <h2>Map</h2>
+  <canvas class="map-canvas" id="mapCanvas" width="600" height="300"></canvas>
+  <div class="map-legend">
+    <span><span class="map-dot map-odom"></span> Odom trace</span>
+    <span><span class="map-dot map-wp"></span> Saved locations</span>
+    <span><span class="map-dot map-det"></span> Detections</span>
+  </div>
+</div>
+
+<div class="card">
+  <h2>TOF Sensor <span class="badge cmd" id="tofBadge">--</span></h2>
+  <div class="tof-row">
+    <div class="tof-block">
+      <div class="tof-label">TOF left</div>
+      <div class="tof-value" id="tofVal0">-- m</div>
+      <div class="tof-bar-wrap"><div class="tof-bar" id="tofBar0" style="width:0%"></div></div>
+    </div>
+    <div class="tof-block">
+      <div class="tof-label">TOF right</div>
+      <div class="tof-value" id="tofVal1">-- m</div>
+      <div class="tof-bar-wrap"><div class="tof-bar" id="tofBar1" style="width:0%"></div></div>
     </div>
   </div>
 </div>
@@ -130,6 +232,309 @@ var cameraCanvas = document.getElementById('cameraCanvas');
 var cameraCtx = cameraCanvas.getContext('2d');
 var camImage = new Image();
 
+var detectionCanvas = document.getElementById('detectionCanvas');
+var detectionCtx = detectionCanvas.getContext('2d');
+var detImage = new Image();
+var detBody = document.getElementById('detBody');
+var detCount = document.getElementById('detCount');
+var gotoStatusEl = document.getElementById('gotoStatus');
+var gotoStopBtn = document.getElementById('gotoStopBtn');
+var wpBody = document.getElementById('wpBody');
+var wpCount = document.getElementById('wpCount');
+var lastWaypoints = [];
+var lastDets = [];
+var selectedRowIdx = -1;
+var mapCanvas = document.getElementById('mapCanvas');
+var mapCtx = mapCanvas.getContext('2d');
+var odomTrace = [];
+var MAX_TRACE = 200;
+var lastOdomX = 0, lastOdomY = 0, lastOdomYaw = 0;
+var mapCX = 0, mapCY = 0;
+
+function selectGotoTarget(idx) {
+  if (!dashboardWs || dashboardWs.readyState !== 1) return;
+  if (idx < 0 || idx >= lastDets.length) return;
+  selectedRowIdx = idx;
+  dashboardWs.send(JSON.stringify({
+    type: 'goto_select', data: lastDets[idx]
+  }));
+  renderDetections(lastDets);
+}
+
+function updateGotoStatus(data) {
+  var status = data.status || 'IDLE';
+  var cls = data.target_class || '';
+  var text = 'Goto: ' + status;
+  if (cls) text += ' (' + cls + ')';
+  if (status === 'TRACKING' && typeof data.distance === 'number') {
+    text += ' — ' + data.distance.toFixed(2) + 'm';
+  }
+  var span = (status === 'TRACKING') ?
+    '<span class="goto-active">' + text + '</span>' :
+    (status === 'SEARCHING') ?
+    '<span class="goto-active">' + text + ' &#x1F50D;</span>' :
+    (status === 'LOST' || status === 'REACHED' || status === 'BLOCKED') ?
+    '<span class="goto-problem">' + text + '</span>' : text;
+  gotoStatusEl.innerHTML = span;
+  gotoStopBtn.style.display = (status === 'TRACKING' || status === 'BLOCKED') ? 'inline-block' : 'none';
+}
+
+gotoStopBtn.addEventListener('click', function() {
+  if (dashboardWs && dashboardWs.readyState === 1) {
+    dashboardWs.send(JSON.stringify({ type: 'goto_cancel' }));
+  }
+});
+
+function renderWaypoints(data) {
+  var wps = Array.isArray(data) ? data : [];
+  lastWaypoints = wps;
+  wpCount.textContent = wps.length;
+  if (wps.length === 0) {
+    var ts = new Date().toLocaleTimeString();
+    wpBody.innerHTML = '<tr><td colspan="3" class="wp-empty">No locations yet (last check: ' +
+      ts + ', type=' + (typeof data) + ')</td></tr>';
+    return;
+  }
+  var html = '';
+  for (var i = 0; i < wps.length; i++) {
+    var w = wps[i];
+    var distStr = (w.z != null) ? ' @' + w.z.toFixed(2) + 'm' : '';
+    var nearStr = '';
+    if (w.nearby && w.nearby.length > 0) {
+      var names = [];
+      for (var j = 0; j < w.nearby.length; j++) {
+        names.push(w.nearby[j].class_name + '(' + w.nearby[j].distance.toFixed(1) + 'm)');
+      }
+      nearStr = '<br><small style="color:#90a4ae">nearby: ' + names.join(', ') + '</small>';
+    }
+    html += '<tr onclick="gotoWaypoint(' + i + ')"><td>' + (w.class_name || '?') + distStr + nearStr +
+      '</td><td>' + (w.x != null ? w.x.toFixed(2) : '?') +
+      '</td><td>' + (w.y != null ? w.y.toFixed(2) : '?') + '</td></tr>';
+  }
+  wpBody.innerHTML = html;
+}
+
+function gotoWaypoint(idx) {
+  if (!dashboardWs || dashboardWs.readyState !== 1) return;
+  if (idx < 0 || idx >= lastWaypoints.length) return;
+  dashboardWs.send(JSON.stringify({ type: 'goto_waypoint', index: idx }));
+}
+
+function drawMap(odomX, odomY, odomYaw) {
+  var w = mapCanvas.width, h = mapCanvas.height;
+  mapCtx.fillStyle = '#0d1b2a';
+  mapCtx.fillRect(0, 0, w, h);
+
+  // auto-zoom: fit robot + waypoints + trace with padding
+  var pts = [[odomX, odomY]];
+  for (var i = 0; i < lastWaypoints.length; i++)
+    pts.push([lastWaypoints[i].x, lastWaypoints[i].y]);
+  for (var k = 0; k < odomTrace.length; k++)
+    pts.push([odomTrace[k].x, odomTrace[k].y]);
+  var minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9;
+  for (var p = 0; p < pts.length; p++) {
+    minX = Math.min(minX, pts[p][0]); maxX = Math.max(maxX, pts[p][0]);
+    minY = Math.min(minY, pts[p][1]); maxY = Math.max(maxY, pts[p][1]);
+  }
+  var spanX = Math.max(maxX - minX, 4);
+  var spanY = Math.max(maxY - minY, 4);
+  var pad = 1.5;
+  var s = Math.min(w / (spanX + 2 * pad), h / (spanY + 2 * pad));
+  var cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  var ox = cx - w / 2 / s;
+  var oy = cy - h / 2 / s;
+
+  function w2c(wx, wy) { return [(wx - ox) * s, h - (wy - oy) * s]; }
+
+  // grid with coordinate labels every 2m
+  mapCtx.strokeStyle = '#ffffff10';
+  mapCtx.fillStyle = '#5a7a9a';
+  mapCtx.font = '9px monospace';
+  mapCtx.lineWidth = 0.5;
+  var gx0 = Math.floor(ox), gy0 = Math.floor(oy);
+  for (var gx = gx0; gx <= gx0 + Math.ceil(w / s); gx++) {
+    var sx = (gx - ox) * s;
+    mapCtx.beginPath(); mapCtx.moveTo(sx, 0); mapCtx.lineTo(sx, h); mapCtx.stroke();
+    if (gx % 2 === 0) mapCtx.fillText(gx + 'm', sx + 2, h - 4);
+  }
+  for (var gy = gy0; gy <= gy0 + Math.ceil(h / s); gy++) {
+    var sy = h - (gy - oy) * s;
+    mapCtx.beginPath(); mapCtx.moveTo(0, sy); mapCtx.lineTo(w, sy); mapCtx.stroke();
+    if (gy % 2 === 0) mapCtx.fillText(gy + 'm', 2, sy - 2);
+  }
+
+  // origin marker
+  var o = w2c(0, 0);
+  if (o[0] > 0 && o[1] > 0 && o[0] < w && o[1] < h) {
+    mapCtx.strokeStyle = '#546e7a'; mapCtx.lineWidth = 1;
+    mapCtx.beginPath();
+    mapCtx.moveTo(o[0] - 6, o[1]); mapCtx.lineTo(o[0] + 6, o[1]);
+    mapCtx.moveTo(o[0], o[1] - 6); mapCtx.lineTo(o[0], o[1] + 6);
+    mapCtx.stroke();
+    mapCtx.fillStyle = '#546e7a'; mapCtx.fillText('0,0', o[0] + 8, o[1] + 4);
+  }
+
+  // odom trace
+  if (odomTrace.length > 1) {
+    mapCtx.strokeStyle = '#78909c';
+    mapCtx.lineWidth = 1.5;
+    mapCtx.beginPath();
+    var t0 = w2c(odomTrace[0].x, odomTrace[0].y);
+    mapCtx.moveTo(t0[0], t0[1]);
+    for (var k = 1; k < odomTrace.length; k++) {
+      var pt = w2c(odomTrace[k].x, odomTrace[k].y);
+      mapCtx.lineTo(pt[0], pt[1]);
+    }
+    mapCtx.stroke();
+  }
+
+  // detections
+  for (var j = 0; j < lastDets.length; j++) {
+    var d = lastDets[j];
+    if (d.z == null) continue;
+    var dx = (d.x != null ? d.x : 0), dz = (d.z != null ? d.z : 0);
+    var wx2 = odomX + dz * Math.cos(odomYaw) - dx * Math.sin(odomYaw);
+    var wy2 = odomY + dz * Math.sin(odomYaw) + dx * Math.cos(odomYaw);
+    var dp = w2c(wx2, wy2);
+    if (dp[0] < 0 || dp[1] < 0 || dp[0] > w || dp[1] > h) continue;
+    mapCtx.fillStyle = '#ffab00';
+    mapCtx.beginPath(); mapCtx.arc(dp[0], dp[1], 3, 0, Math.PI * 2); mapCtx.fill();
+  }
+
+  // waypoints (blue, with label + coords)
+  for (var i = 0; i < lastWaypoints.length; i++) {
+    var wp = lastWaypoints[i];
+    var wc = w2c(wp.x, wp.y);
+    if (wc[0] < 0 || wc[1] < 0 || wc[0] > w || wc[1] > h) continue;
+    mapCtx.fillStyle = '#4fc3f7';
+    mapCtx.beginPath(); mapCtx.arc(wc[0], wc[1], 5, 0, Math.PI * 2); mapCtx.fill();
+    mapCtx.strokeStyle = '#fff'; mapCtx.lineWidth = 1; mapCtx.stroke();
+    mapCtx.fillStyle = '#4fc3f7';
+    mapCtx.font = 'bold 10px sans-serif';
+    mapCtx.fillText((wp.class_name || '?') + ' (' + wp.x.toFixed(1) + ',' + wp.y.toFixed(1) + ')',
+                    wc[0] + 8, wc[1] - 8);
+  }
+
+  // target line (dashed red, when tracking/waypoint)
+  if (lastWaypoints.length > 0 && selectedRowIdx >= 0 &&
+      selectedRowIdx < lastWaypoints.length) {
+    var twp = w2c(lastWaypoints[selectedRowIdx].x, lastWaypoints[selectedRowIdx].y);
+    var rp = w2c(odomX, odomY);
+    mapCtx.strokeStyle = '#ff1744';
+    mapCtx.setLineDash([5, 4]); mapCtx.lineWidth = 1.5;
+    mapCtx.beginPath(); mapCtx.moveTo(rp[0], rp[1]); mapCtx.lineTo(twp[0], twp[1]); mapCtx.stroke();
+    mapCtx.setLineDash([]);
+  }
+
+  // robot (bigger triangle with outline)
+  var r = w2c(odomX, odomY);
+  var size = 11;
+  mapCtx.beginPath();
+  mapCtx.moveTo(r[0] + size * Math.cos(odomYaw), r[1] - size * Math.sin(odomYaw));
+  mapCtx.lineTo(r[0] + size * 0.5 * Math.cos(odomYaw + 2.5), r[1] - size * 0.5 * Math.sin(odomYaw + 2.5));
+  mapCtx.lineTo(r[0] + size * 0.5 * Math.cos(odomYaw - 2.5), r[1] - size * 0.5 * Math.sin(odomYaw - 2.5));
+  mapCtx.closePath();
+  mapCtx.fillStyle = '#ff1744'; mapCtx.fill();
+  mapCtx.strokeStyle = '#fff'; mapCtx.lineWidth = 1.5; mapCtx.stroke();
+
+  // scale bar (1m) bottom-right
+  var barLen = 1 * s;
+  if (barLen > 10 && barLen < w / 2) {
+    mapCtx.strokeStyle = '#fff'; mapCtx.lineWidth = 2;
+    mapCtx.beginPath();
+    mapCtx.moveTo(w - barLen - 15, h - 12);
+    mapCtx.lineTo(w - 15, h - 12);
+    mapCtx.stroke();
+    mapCtx.fillStyle = '#fff'; mapCtx.font = '10px sans-serif';
+    mapCtx.fillText('1m', w - barLen / 2 - 20, h - 18);
+  }
+
+  // north indicator (y-axis up)
+  mapCtx.fillStyle = '#78909c'; mapCtx.font = 'bold 12px sans-serif';
+  mapCtx.fillText('N ↑', 8, 18);
+}
+
+function updateMapOdom(x, y, yaw) {
+  odomTrace.push({ x: x, y: y, yaw: yaw });
+  if (odomTrace.length > MAX_TRACE) odomTrace.shift();
+  lastOdomX = x; lastOdomY = y; lastOdomYaw = yaw;
+  drawMap(x, y, yaw);
+}
+
+function clearWaypoints() {
+  if (!dashboardWs || dashboardWs.readyState !== 1) return;
+  dashboardWs.send(JSON.stringify({ type: 'clear_waypoints' }));
+}
+
+var tofVals = [document.getElementById('tofVal0'), document.getElementById('tofVal1')];
+var tofBars = [document.getElementById('tofBar0'), document.getElementById('tofBar1')];
+var tofBadge = document.getElementById('tofBadge');
+
+function renderTof(data) {
+  var ranges = data.ranges_m || [];
+  var count = data.count || 0;
+  tofBadge.textContent = count + '/' + ranges.length + ' @' + new Date().toLocaleTimeString();
+  var MAX_M = 1.2;
+  for (var i = 0; i < 2; i++) {
+    var r = (i < ranges.length) ? ranges[i] : null;
+    if (r === null || r === undefined) {
+      tofVals[i].textContent = '-- m';
+      tofVals[i].style.color = '#546e7a';
+      tofBars[i].style.width = '0%';
+      tofBars[i].style.background = '#546e7a';
+    } else {
+      var pct = Math.min(100, (r / MAX_M) * 100);
+      var color = r < 0.2 ? '#ff1744' : r < 0.5 ? '#ffab00' : '#00e676';
+      tofVals[i].textContent = r.toFixed(2) + ' m';
+      tofVals[i].style.color = color;
+      tofBars[i].style.width = pct + '%';
+      tofBars[i].style.background = color;
+    }
+  }
+}
+
+function drawFrame(canvasEl, ctx, img, b64) {
+  img.onload = function() {
+    var cw = canvasEl.width;
+    var ch = canvasEl.height;
+    var scale = Math.min(cw / img.width, ch / img.height);
+    var dw = img.width * scale;
+    var dh = img.height * scale;
+    ctx.fillStyle = '#0d1b2a';
+    ctx.fillRect(0, 0, cw, ch);
+    ctx.drawImage(img, (cw - dw) / 2, (ch - dh) / 2, dw, dh);
+  };
+  img.src = 'data:image/jpeg;base64,' + b64;
+}
+
+function renderDetections(data) {
+  var dets = Array.isArray(data) ? data : (data && data.detections) || [];
+  lastDets = dets;
+  var stamp = new Date().toLocaleTimeString();
+  detCount.textContent = dets.length;
+  if (dets.length === 0) {
+    selectedRowIdx = -1;
+    detBody.innerHTML =
+      '<tr><td colspan="4" class="det-empty">No objects detected</td></tr>';
+    return;
+  }
+  var html = '';
+  for (var k = 0; k < dets.length; k++) {
+    var d = dets[k];
+    var cls = d.class_name !== undefined ? d.class_name : d.class;
+    var bbox = d.bbox || d.box || [];
+    var conf = (typeof d.confidence === 'number') ?
+      d.confidence.toFixed(2) : d.confidence;
+    var dist = (typeof d.distance === 'number') ?
+      ' ' + d.distance.toFixed(2) + 'm' : '';
+    var sel = (k === selectedRowIdx) ? ' selected' : '';
+    html += '<tr class="det-row' + sel + '" onclick="selectGotoTarget(' + k +
+      ')"><td>' + stamp + '</td><td>' + cls + dist + '</td><td>' + conf +
+      '</td><td>[' + bbox.join(', ') + ']</td></tr>';
+  }
+  detBody.innerHTML = html;
+}
+
 var wsDot = document.getElementById('wsDot');
 var wsLabel = document.getElementById('wsLabel');
 var zoneBars = document.getElementById('zoneBars');
@@ -176,17 +581,31 @@ function connectDashboardWs() {
 function handleWsMessage(msg) {
   switch (msg.type) {
     case 'camera':
-      camImage.onload = function() {
-        var cw = cameraCanvas.width;
-        var ch = cameraCanvas.height;
-        var scale = Math.min(cw / camImage.width, ch / camImage.height);
-        var dw = camImage.width * scale;
-        var dh = camImage.height * scale;
-        cameraCtx.fillStyle = '#0d1b2a';
-        cameraCtx.fillRect(0, 0, cw, ch);
-        cameraCtx.drawImage(camImage, (cw - dw) / 2, (ch - dh) / 2, dw, dh);
-      };
-      camImage.src = 'data:image/jpeg;base64,' + msg.data;
+      drawFrame(cameraCanvas, cameraCtx, camImage, msg.data);
+      break;
+
+    case 'detection_image':
+      drawFrame(detectionCanvas, detectionCtx, detImage, msg.data);
+      break;
+
+    case 'detections':
+      renderDetections(msg.data);
+      try { drawMap(lastOdomX, lastOdomY, lastOdomYaw); } catch(e) {}
+      break;
+
+    case 'goto_status':
+      updateGotoStatus(msg.data);
+      break;
+
+    case 'waypoints':
+      try { renderWaypoints(msg.data); } catch(e) {
+        wpBody.innerHTML = '<tr><td colspan="3" class="wp-empty">JS error: ' + e.message + '</td></tr>';
+      }
+      try { drawMap(lastOdomX, lastOdomY, lastOdomYaw); } catch(e) {}
+      break;
+
+    case 'tof':
+      renderTof(msg.data);
       break;
 
     case 'odom':
@@ -195,6 +614,7 @@ function handleWsMessage(msg) {
       document.getElementById('posYaw').textContent = msg.data.yaw.toFixed(2);
       document.getElementById('velLinear').textContent = msg.data.linear.toFixed(2);
       document.getElementById('velAngular').textContent = msg.data.angular.toFixed(2);
+      updateMapOdom(msg.data.x, msg.data.y, msg.data.yaw);
       break;
 
     case 'mode':

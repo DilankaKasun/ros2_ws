@@ -29,6 +29,10 @@ def generate_launch_description():
         get_package_share_directory('ecobot_sensors'),
         'launch', 'depth_to_scan.launch.py')
 
+    mapping_launch = os.path.join(
+        get_package_share_directory('ecobot_bringup'),
+        'launch', 'rtabmap_mapping.launch.py')
+
     return LaunchDescription([
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(motor_launch),
@@ -43,6 +47,7 @@ def generate_launch_description():
                     '"', LaunchConfiguration('enable_obstacle_avoidance', default='false'),
                     '" == "true" or "', LaunchConfiguration('enable_navigation', default='false'),
                     '" == "true"']),
+                'enable_detection': LaunchConfiguration('enable_detection', default='false'),
             }.items(),
             condition=IfCondition(
                 LaunchConfiguration('enable_sensors', default='true')),
@@ -58,14 +63,19 @@ def generate_launch_description():
                 LaunchConfiguration('enable_teleop', default='false')),
         ),
         IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(nav_launch),
+            PythonLaunchDescriptionSource(mapping_launch),
+            launch_arguments={
+                'visual_odometry': 'false',
+                'database_path': '/home/ecobot/map_data/rtabmap.db',
+            }.items(),
             condition=IfCondition(
-                LaunchConfiguration('enable_navigation', default='false')),
+                LaunchConfiguration('enable_mapping', default='false')),
         ),
-        Node(
-            package='ecobot_bringup',
-            executable='cmd_vel_mux',
-            name='cmd_vel_mux',
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(nav_launch),
+            launch_arguments={
+                'map': LaunchConfiguration('map', default=''),
+            }.items(),
             condition=IfCondition(
                 LaunchConfiguration('enable_navigation', default='false')),
         ),
@@ -85,7 +95,7 @@ def generate_launch_description():
             cmd=['ros2', 'run', 'rosbridge_server', 'rosbridge_websocket', '--port', '9090'],
             name='rosbridge_websocket',
             condition=IfCondition(
-                LaunchConfiguration('enable_rosbridge', default='false')),
+                LaunchConfiguration('enable_rosbridge', default='true')),
             shell=True,
         ),
     ])

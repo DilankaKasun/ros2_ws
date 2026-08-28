@@ -1,3 +1,4 @@
+import glob
 from setuptools import setup
 
 package_name = 'ecobot_dashboard'
@@ -10,7 +11,7 @@ setup(
         ('share/ament_index/resource_index/packages', [f'resource/{package_name}']),
         (f'share/{package_name}', ['package.xml']),
         (f'share/{package_name}/launch', ['launch/dashboard.launch.py']),
-        (f'share/{package_name}/www', ['www/index.html']),
+        (f'share/{package_name}/www', glob.glob('www/*.html')),
     ],
     install_requires=['setuptools', 'aiohttp'],
     zip_safe=True,

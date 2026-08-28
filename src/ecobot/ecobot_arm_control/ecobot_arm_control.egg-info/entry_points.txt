@@ -1,0 +1,8 @@
+[console_scripts]
+arm_camera_server = ecobot_arm_control.arm_camera_server:main
+arm_manual_node = ecobot_arm_control.arm_manual_node:main
+arm_scanner_node = ecobot_arm_control.arm_scanner_node:main
+minicpm_vla_node = ecobot_arm_control.minicpm_vla_node:main
+openvla_node = ecobot_arm_control.openvla_node:main
+usb_camera_node = ecobot_arm_control.usb_camera_node:main
+

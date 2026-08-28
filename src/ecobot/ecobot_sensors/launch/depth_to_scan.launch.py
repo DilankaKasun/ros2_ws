@@ -17,8 +17,17 @@ def generate_launch_description():
                 'scan_time': 0.033,
             }],
             remappings=[
-                ('/depth/image', '/camera/depth/image_raw'),
-                ('/depth/points', '/camera/depth/color/points'),
+                ('depth', '/camera/depth/image_raw'),
+                ('depth_camera_info', '/camera/depth/camera_info'),
             ],
+        ),
+        # Sanitize /scan (NaN/out-of-range -> inf) before Nav2 ingests it.
+        # AMCL segfaults on invalid ranges; nav configs subscribe to
+        # /scan_filtered, which this node publishes.
+        Node(
+            package='ecobot_sensors',
+            executable='scan_filter_node',
+            name='scan_filter',
+            output='screen',
         ),
     ])

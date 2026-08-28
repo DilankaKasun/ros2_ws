@@ -12,8 +12,8 @@ import threading
 import serial
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import Twist, TransformStamped
-from nav_msgs.msg import Odometry
+from geometry_msgs.msg import Twist, TransformStamped, PoseStamped
+from nav_msgs.msg import Odometry, Path
 from sensor_msgs.msg import JointState
 from std_msgs.msg import UInt8
 from tf2_ros import TransformBroadcaster
@@ -39,7 +39,7 @@ class MotorControlNode(Node):
 
         self.declare_parameter('serial_port', '/dev/ttyACM0')
         self.declare_parameter('baudrate', 115200)
-        self.declare_parameter('control_frequency', 10.0)
+        self.declare_parameter('control_frequency', 50.0)
         self.declare_parameter('cmd_vel_timeout', 0.5)
         self.declare_parameter('max_rpm', 130.0)
         self.declare_parameter('product_id', 1)
@@ -80,12 +80,28 @@ class MotorControlNode(Node):
 
         self.last_loop_time = time.time()
 
+        counts_per_wheel_rev = self.params.encoder_resolution * self.params.reduction_ratio
+        max_counts_per_sec = self.max_rpm / 60.0 * counts_per_wheel_rev
+        self.max_allowed_delta = int(max_counts_per_sec / self.control_freq * 1.5) + 1
+        self.get_logger().info(
+            f'encoder max_allowed_delta={self.max_allowed_delta} counts')
+
+        self._actual_path = Path()
+        self._actual_path.header.frame_id = self.odom_frame
+        self._predicted_path = Path()
+        self._predicted_path.header.frame_id = self.odom_frame
+        self._max_path_poses = 500
+        self._predicted_steps = 30
+        self._predicted_dt = 0.1
+
         self.cmd_vel_sub = self.create_subscription(
             Twist, '/cmd_vel', self.cmd_vel_callback, 10)
 
         self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
         self.joint_state_pub = self.create_publisher(JointState, '/joint_states', 10)
         self.run_mode_pub = self.create_publisher(UInt8, '/run_mode', 10)
+        self.actual_path_pub = self.create_publisher(Path, '/ecobot/actual_path', 10)
+        self.predicted_path_pub = self.create_publisher(Path, '/ecobot/predicted_path', 10)
 
         self.tf_broadcaster = TransformBroadcaster(self)
 
@@ -133,18 +149,20 @@ class MotorControlNode(Node):
 
     def cmd_vel_callback(self, msg: Twist):
         """
-        Store the latest commanded linear-x and angular-z speeds.
-
-        Parameters
-        ----------
-        msg : Twist
-            Incoming velocity command.  Only ``linear.x`` and ``angular.z``
-            are used.
+        Store the latest commanded linear-x and angular-z speeds and dispatch immediately.
         """
+        now = time.time()
         with self.cmd_lock:
             self.cmd_linear = msg.linear.x
             self.cmd_angular = msg.angular.z
-            self.cmd_vel_stamp = time.time()
+            self.cmd_vel_stamp = now
+            l_rpm, r_rpm = twist_to_rpm(self.cmd_linear, self.cmd_angular, self.params)
+            l_rpm = max(-self.max_rpm, min(self.max_rpm, l_rpm))
+            r_rpm = max(-self.max_rpm, min(self.max_rpm, r_rpm))
+
+        # Instant sub-millisecond serial dispatch (<0.3ms to microcontroller)
+        packet = build_send_packet(l_rpm, r_rpm, self.product_id)
+        self.write_serial(packet)
 
     def read_serial(self):
         """
@@ -269,6 +287,18 @@ class MotorControlNode(Node):
         diff_l = self.encoder_l - self.prev_encoder_l
         diff_r = self.encoder_r - self.prev_encoder_r
 
+        if abs(diff_l) > self.max_allowed_delta:
+            self.get_logger().warn(
+                f'outlier left encoder delta={diff_l} > {self.max_allowed_delta}')
+            self.encoder_l = self.prev_encoder_l
+            diff_l = 0
+
+        if abs(diff_r) > self.max_allowed_delta:
+            self.get_logger().warn(
+                f'outlier right encoder delta={diff_r} > {self.max_allowed_delta}')
+            self.encoder_r = self.prev_encoder_r
+            diff_r = 0
+
         linear_x, angular_z = encoder_delta_to_twist(
             diff_l, diff_r, dt, self.params)
 
@@ -319,6 +349,47 @@ class MotorControlNode(Node):
         tf_msg.transform.rotation.z = qz
         tf_msg.transform.rotation.w = qw
         self.tf_broadcaster.sendTransform(tf_msg)
+
+        self._update_actual_path(stamp)
+        self._update_predicted_path(stamp, linear_x, angular_z)
+
+    def _update_actual_path(self, stamp):
+        pose = PoseStamped()
+        pose.header.stamp = stamp
+        pose.header.frame_id = self.odom_frame
+        pose.pose.position.x = self.pose_x
+        pose.pose.position.y = self.pose_y
+        pose.pose.orientation.z = math.sin(self.pose_yaw / 2.0)
+        pose.pose.orientation.w = math.cos(self.pose_yaw / 2.0)
+        self._actual_path.header.stamp = stamp
+        self._actual_path.poses.append(pose)
+        if len(self._actual_path.poses) > self._max_path_poses:
+            self._actual_path.poses = self._actual_path.poses[-self._max_path_poses:]
+        self.actual_path_pub.publish(self._actual_path)
+
+    def _update_predicted_path(self, stamp, linear_x, angular_z):
+        self._predicted_path.header.stamp = stamp
+        self._predicted_path.poses = []
+        px, py, pyaw = self.pose_x, self.pose_y, self.pose_yaw
+        for i in range(1, self._predicted_steps + 1):
+            t = i * self._predicted_dt
+            if abs(angular_z) > 1e-6:
+                r = linear_x / angular_z
+                px = self.pose_x - r * math.sin(self.pose_yaw) + r * math.sin(self.pose_yaw + angular_z * t)
+                py = self.pose_y + r * math.cos(self.pose_yaw) - r * math.cos(self.pose_yaw + angular_z * t)
+                pyaw = self.pose_yaw + angular_z * t
+            else:
+                px = self.pose_x + linear_x * t * math.cos(pyaw)
+                py = self.pose_y + linear_x * t * math.sin(pyaw)
+            ps = PoseStamped()
+            ps.header.stamp = stamp
+            ps.header.frame_id = self.odom_frame
+            ps.pose.position.x = px
+            ps.pose.position.y = py
+            ps.pose.orientation.z = math.sin(pyaw / 2.0)
+            ps.pose.orientation.w = math.cos(pyaw / 2.0)
+            self._predicted_path.poses.append(ps)
+        self.predicted_path_pub.publish(self._predicted_path)
 
     def destroy_node(self):
         """Close the serial connection, then call the parent cleanup."""

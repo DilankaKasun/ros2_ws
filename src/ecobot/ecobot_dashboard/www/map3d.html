@@ -15,13 +15,14 @@ body { background: #0a0a1a; overflow: hidden; font-family: 'Segoe UI', sans-seri
   position: fixed; top: 12px; left: 12px; z-index: 10;
   background: rgba(10,10,30,0.85); border: 1px solid #334; border-radius: 8px;
   padding: 12px 18px; font-size: 13px; line-height: 1.6; min-width: 220px;
+  max-width: calc(100vw - 24px);
   backdrop-filter: blur(4px);
   pointer-events: none;
 }
 #hud h2 { font-size: 15px; color: #4fc3f7; margin-bottom: 6px; }
 #hud .label { color: #889; }
 #hud .value { color: #eee; font-family: 'Courier New', monospace; }
-#hud .row { display: flex; justify-content: space-between; }
+#hud .row { display: flex; justify-content: space-between; gap: 12px; }
 #hud .note { font-size: 11px; color: #667; margin-top: 4px; }
 #toolbar {
   position: fixed; top: 12px; right: 12px; z-index: 10;
@@ -34,6 +35,7 @@ body { background: #0a0a1a; overflow: hidden; font-family: 'Segoe UI', sans-seri
   background: rgba(10,10,30,0.85); border: 1px solid #334;
   border-radius: 6px; padding: 6px 14px; cursor: pointer;
   font-family: inherit; text-align: center;
+  white-space: nowrap;
 }
 #toolbar a:hover, #toolbar button:hover { background: rgba(30,30,60,0.9); }
 #toolbar .active { background: rgba(30,60,90,0.9); border-color: #4fc3f7; }
@@ -42,17 +44,37 @@ body { background: #0a0a1a; overflow: hidden; font-family: 'Segoe UI', sans-seri
   background: rgba(10,10,30,0.85); border: 1px solid #334; border-radius: 8px;
   padding: 8px 18px; font-size: 13px; color: #889;
   backdrop-filter: blur(4px); text-align: center;
+  max-width: calc(100vw - 24px);
 }
 #controls-hint {
   position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 10;
   background: rgba(10,10,30,0.75); border: 1px solid #334; border-radius: 6px;
   padding: 6px 16px; font-size: 11px; color: #556;
   backdrop-filter: blur(4px);
+  max-width: calc(100vw - 24px); text-align: center;
 }
 #status-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
 .dot-ok { background: #4caf50; box-shadow: 0 0 6px #4caf5066; }
 .dot-err { background: #f44336; box-shadow: 0 0 6px #f4433666; }
 .dot-wait { background: #ff9800; box-shadow: 0 0 6px #ff980066; }
+
+@media (max-width: 520px) {
+  #hud {
+    min-width: 0;
+    width: calc(50vw - 18px);
+    padding: 8px 10px;
+    font-size: 11px;
+  }
+  #hud h2 { font-size: 12px; }
+  #toolbar {
+    max-width: calc(50vw - 18px);
+  }
+  #toolbar a, #toolbar button {
+    font-size: 11px;
+    padding: 5px 8px;
+  }
+  #controls-hint { display: none; }
+}
 </style>
 </head>
 <body>
@@ -134,7 +156,7 @@ async function fetchPointCloud() {
   const statusMsg = document.getElementById('statusMsg');
   const statusEl = document.getElementById('status');
   try {
-    const resp = await fetch('/map3d');
+    const resp = await fetch('/map3d?format=bin');
     if (!resp.ok) { statusMsg.textContent = 'Connecting...'; return; }
     const buf = await resp.arrayBuffer();
     if (buf.byteLength < 4) {

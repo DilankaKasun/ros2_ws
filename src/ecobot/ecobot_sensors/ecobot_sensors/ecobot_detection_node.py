@@ -45,10 +45,6 @@ COCO_NAMES = [
     'scissors', 'teddy bear', 'hair drier', 'toothbrush',
 ]
 
-_rng = np.random.RandomState(42)
-COLORS = _rng.randint(0, 255, (len(COCO_NAMES), 3), dtype=np.int32)
-
-
 class TrtBackend:
     """Minimal YOLOv8 TensorRT runtime (fallback when ultralytics is missing)."""
 
@@ -329,7 +325,6 @@ class EcobotDetectionNode(Node):
         else:
             detections = self._infer_tensorrt(img)
 
-        overlay = img.copy()
         points_3d = []
         for det in detections:
             x1, y1, x2, y2 = det['bbox']
@@ -345,40 +340,35 @@ class EcobotDetectionNode(Node):
                 det['x'] = round(x_3d, 3)
                 det['y'] = round(y_3d, 3)
                 det['z'] = round(z_3d, 3)
+                # Physical height and vertical bounds estimation from 2D bounding box + depth
+                bbox_h_px = max(1, abs(y2 - y1))
+                h_3d = (bbox_h_px * depth_val) / self.fy
+                det['height'] = round(h_3d, 3)
+                det['z_top'] = round(z_3d + h_3d / 2.0, 3)
+                det['z_bottom'] = round(z_3d - h_3d / 2.0, 3)
+                det['plant_type'] = det.get('class_name', 'plant')
                 points_3d.append([x_3d, y_3d, z_3d])
-
-            color = tuple(int(c) for c in
-                          COLORS[det['class_id'] % len(COLORS)])
-            label = f"{det['class_name']} {det['confidence']:.2f}"
-            if depth_val is not None:
-                label += f' {depth_val:.2f}m'
-            cv2.rectangle(overlay, (x1, y1), (x2, y2), color, 2)
-            (tw, th), _ = cv2.getTextSize(
-                label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-            cv2.rectangle(overlay, (x1, y1 - th - 6), (x1 + tw + 4, y1),
-                          color, -1)
-            cv2.putText(overlay, label, (x1 + 2, y1 - 4),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
         det_msg = String()
         det_msg.data = json.dumps(detections)
         self.detections_pub.publish(det_msg)
 
         if points_3d:
-            self._publish_pointcloud(np.array(points_3d, dtype=np.float32))
+            self._publish_pointcloud(np.array(points_3d, dtype=np.float32), header.stamp if header else None)
 
-        try:
-            overlay_msg = self.bridge.cv2_to_imgmsg(overlay, encoding='bgr8')
-            overlay_msg.header = header
-            self.overlay_pub.publish(overlay_msg)
-        except Exception:
-            pass
+        if self.overlay_pub.get_subscription_count() > 0:
+            try:
+                overlay_msg = self.bridge.cv2_to_imgmsg(img, encoding='bgr8')
+                overlay_msg.header = header
+                self.overlay_pub.publish(overlay_msg)
+            except Exception:
+                pass
 
-    def _publish_pointcloud(self, points):
+    def _publish_pointcloud(self, points, stamp=None):
         if len(points) == 0:
             return
         msg = PointCloud2()
-        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.stamp = stamp if stamp is not None else self.get_clock().now().to_msg()
         msg.header.frame_id = self.camera_frame
         msg.height = 1
         msg.width = len(points)

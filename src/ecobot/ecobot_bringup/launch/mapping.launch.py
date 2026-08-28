@@ -11,12 +11,9 @@ def generate_launch_description():
     bringup_share = get_package_share_directory('ecobot_bringup')
     sensors_share = get_package_share_directory('ecobot_sensors')
     motor_share = get_package_share_directory('ecobot_motor_control')
-    teleop_share = get_package_share_directory('ecobot_teleop')
-    dash_share = get_package_share_directory('ecobot_dashboard')
 
     return LaunchDescription([
         DeclareLaunchArgument('serial_port', default_value='/dev/ttyACM0'),
-        DeclareLaunchArgument('enable_teleop', default_value='false'),
 
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
@@ -44,14 +41,5 @@ def generate_launch_description():
                 'database_path': '/home/ecobot/map_data/rtabmap.db',
                 'rtabmap_viz': 'false',
             }.items(),
-        ),
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(
-                os.path.join(teleop_share, 'launch', 'teleop.launch.py')),
-            condition=IfCondition(LaunchConfiguration('enable_teleop')),
-        ),
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(
-                os.path.join(dash_share, 'launch', 'dashboard.launch.py')),
         ),
     ])

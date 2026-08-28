@@ -110,7 +110,7 @@ Contains master launch files and utility nodes.
 - `send_goal` — CLI utility to send a `NavigateToPose` goal: `ros2 run ecobot_bringup send_goal <x> <y> <yaw>`
 
 **Launch files:**
-- `ecobot.launch.py` — Master launch with conditional flags: `enable_sensors`, `enable_teleop`, `enable_navigation`, `enable_mapping`, `enable_detection`, `enable_chair_navigation`, `enable_obstacle_avoidance`, `enable_dashboard`, `enable_rosbridge`, `enable_urdf`, `serial_port`, `map`
+- `ecobot.launch.py` — Master launch with conditional flags: `enable_sensors`, `enable_navigation`, `enable_mapping`, `enable_detection`, `enable_chair_navigation`, `enable_obstacle_avoidance`, `enable_dashboard`, `enable_rosbridge`, `enable_urdf`, `serial_port`, `map`
 - `mapping.launch.py` — Dedicated mapping launch with RTAB-Map, sensors, depth-to-scan, dashboard, and rosbridge
 - `rtabmap_mapping.launch.py` — RTAB-Map RGB-D SLAM with configurable visual odometry, database path, and scan topic
 - `slam.launch.py` — `slam_toolbox` async node for 2D SLAM
@@ -137,13 +137,6 @@ Provides an aiohttp web UI on port 8080 featuring live camera feeds, odometry st
 - `dashboard_server` — aiohttp web server serving static files from `www/`, WebSocket endpoint at `/ws`, 2D map binary at `/map2d/data`, 3D point cloud at `/map3d/data`.
   - **Subscribed topics:** `/odom`, `/run_mode`, `/camera/color/image_raw`, `/detection_overlay`, `/camera/depth/image_raw`, `/detections`, `/rtabmap/cloud_map`, `/rtabmap/map`, `/rtabmap/grid_prob_map`
   - **Parameters:** `port` (8080), `depth_topic`, `camera_topic`, `detection_topic`, `num_zones` (5), `safe_distance` (0.9), `warn_distance` (1.1), `depth_scale` (0.001), `map3d_max_points` (80000)
-
-### `ecobot_teleop`
-Enables keyboard-based teleoperation.
-
-**Nodes:**
-- `keyboard_teleop` — Publishes `/cmd_vel` from keyboard input (w/s/a/d/space/q).
-  - **Parameters:** `max_linear_speed` (0.5), `max_angular_speed` (1.0), `linear_step` (0.05), `angular_step` (0.1)
 
 ## Data Flow & Navigation Logic
 
@@ -215,7 +208,6 @@ camera_depth_optical_frame → camera_color_optical_frame  (static: x=0.018, y=0
 | `chair_navigator` | `ecobot_sensors` | `chair_navigator` | Chair detection → Nav2 goal |
 | `waypoint_follower` | `ecobot_navigation` | `waypoint_follower` | CSV waypoint following |
 | `dashboard_server` | `ecobot_dashboard` | `dashboard_server` | Web UI (aiohttp + WebSocket) |
-| `keyboard_teleop` | `ecobot_teleop` | `keyboard_teleop` | Keyboard velocity control |
 | `cmd_vel_mux` | `ecobot_bringup` | `cmd_vel_mux` | Nav2 → cmd_vel relay |
 | `send_goal` | `ecobot_bringup` | `send_goal` | CLI Nav2 goal sender |
 
@@ -224,7 +216,6 @@ camera_depth_optical_frame → camera_color_optical_frame  (static: x=0.018, y=0
 | Flag | Default | Description |
 |------|---------|-------------|
 | `enable_sensors` | `true` | Start RealSense and camera streams |
-| `enable_teleop` | `false` | Start keyboard teleop |
 | `enable_navigation` | `false` | Start Nav2 stack (with optional map) |
 | `enable_mapping` | `false` | Start RTAB-Map RGB-D SLAM |
 | `enable_detection` | `false` | Start SSD MobileNet object detection |
@@ -233,6 +224,5 @@ camera_depth_optical_frame → camera_color_optical_frame  (static: x=0.018, y=0
 | `enable_dashboard` | `true` | Start web dashboard |
 | `enable_rosbridge` | `true` | Start rosbridge WebSocket server |
 | `enable_urdf` | `false` | Start robot_state_publisher |
-| `enable_teleop` | `false` | Start keyboard teleop |
 | `serial_port` | `/dev/ttyACM0` | Motor controller serial device |
 | `map` | `""` | Path to YAML map file for Nav2 |

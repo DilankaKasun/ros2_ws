@@ -1,0 +1,40 @@
+plant_mission_node:
+  ros__parameters:
+    # -- topics / action --
+    plant_scan_cmd_topic: /ecobot/plant_scan_cmd
+    plant_scan_status_topic: /ecobot/plant_scan_status
+    scan_capture_topic: /ecobot/scan_capture
+    scanner_cmd_topic: /arm/scanner_cmd
+    scanner_status_topic: /arm/scanner_status
+    wrist_camera_topic: /arm/camera/image_raw
+    fallback_waypoints_topic: /ecobot/waypoints
+    nav_action_name: /navigate_to_pose
+
+    # -- mission behavior --
+    auto_advance: true
+    default_frame: map
+
+    # -- standoff / approach --
+    approach_standoff_m: 0.4
+    goal_wait_timeout_s: 90.0
+    nav_server_wait_s: 5.0
+    nav_settle_s: 0.5
+
+    # -- Target class filter for crops & plants --
+    fallback_target_classes: ['potted plant', 'plant', 'pot', 'crop', 'leaf', 'tree', 'flower', 'vegetable']
+
+    # -- arm scan handoff --
+    arm_scan_x: 0.35
+    arm_scan_y: 0.0
+    arm_scan_z: 0.18
+
+    # -- capture timing --
+    capture_delay_s: 1.2
+    frame_max_age_s: 2.0
+    scan_settle_timeout_s: 90.0
+
+    # -- Gemini Plant Analysis --
+    gemini_model: ''
+    gemini_timeout_s: 20.0
+    gemini_max_retries: 1
+    jpeg_quality: 85

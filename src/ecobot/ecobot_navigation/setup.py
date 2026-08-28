@@ -10,7 +10,9 @@ setup(
         ('share/ament_index/resource_index/packages', [f'resource/{package_name}']),
         (f'share/{package_name}', ['package.xml']),
         (f'share/{package_name}/launch', ['launch/navigation.launch.py']),
-        (f'share/{package_name}/config', ['config/nav2_params.yaml', 'config/nav2_params_mapless.yaml']),
+        (f'share/{package_name}/config', ['config/nav2_params.yaml', 'config/nav2_params_mapless.yaml',
+                                           'config/localization_params.yaml']),
+        (f'share/{package_name}/maps', ['maps/default_map.yaml', 'maps/default_map.pgm']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -22,6 +24,8 @@ setup(
     entry_points={
         'console_scripts': [
             'waypoint_follower = ecobot_navigation.waypoint_follower:main',
+            'save_map = ecobot_navigation.scripts.save_map:main',
         ],
     },
+    scripts=['scripts/save_map.py'],
 )

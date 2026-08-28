@@ -1,801 +1,1024 @@
 <!DOCTYPE html>
-<html>
+<html class="dark" lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ecobot Dashboard</title>
-<script src="https://cdn.jsdelivr.net/npm/roslib@1/build/roslib.min.js"></script>
-<style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: 'Segoe UI', sans-serif; background: #1a1a2e; color: #eee; padding: 16px; }
-h1 { font-size: 1.4rem; margin-bottom: 12px; display: flex; align-items: center; gap: 10px; }
-.status-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
-.status-dot.connected { background: #00e676; box-shadow: 0 0 8px #00e67688; }
-.status-dot.disconnected { background: #ff1744; }
-.card { background: #16213e; border-radius: 8px; padding: 16px; margin-bottom: 12px; }
-.card h2 { font-size: 1rem; margin-bottom: 8px; color: #90caf9; }
-.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.stat-row { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid #ffffff15; }
-.stat-row:last-child { border: none; }
-.stat-label { color: #90a4ae; }
-.stat-value { font-family: 'Courier New', monospace; font-weight: bold; }
-.badge { padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; }
-.badge.cmd { background: #00c853; color: #000; }
-.badge.rc { background: #ff6d00; color: #000; }
-canvas { width: 100%; height: auto; border: 1px solid #ffffff22; border-radius: 4px; touch-action: none; }
-.camera-frame { width: 100%; max-height: 360px; object-fit: contain; border-radius: 4px; border: 1px solid #ffffff22; background: #0d1b2a; display: block; }
-.joystick-container { position: relative; width: 100%; aspect-ratio: 1; max-width: 200px; }
-.joystick-container canvas { position: absolute; top: 0; left: 0; }
-.controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-button { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
-button.emergency { background: #d50000; color: white; }
-button.emergency:hover { background: #ff1744; }
-input[type=range] { width: 100px; }
-.camera-grid { display: grid; grid-template-columns: 1.5fr 1fr; gap: 12px; align-items: start; }
-.det-grid { display: grid; grid-template-columns: 1.2fr 1fr; gap: 12px; align-items: start; }
-.det-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
-.det-table th { text-align: left; color: #90a4ae; font-weight: normal; padding: 4px 6px; border-bottom: 1px solid #ffffff22; }
-.det-table td { padding: 4px 6px; border-bottom: 1px solid #ffffff10; font-family: 'Courier New', monospace; }
-.det-table tr:last-child td { border: none; }
-.det-empty { color: #90a4ae; text-align: center; }
-.det-table tbody tr.det-row { cursor: pointer; }
-.det-table tbody tr.det-row:hover { background: #ffffff12; }
-.det-table tbody tr.det-row.selected { background: #1e3a5f; }
-.goto-bar { display: flex; align-items: center; gap: 10px; margin-top: 10px; padding-top: 8px; border-top: 1px solid #ffffff15; }
-.goto-status { font-size: 0.85rem; color: #90a4ae; flex: 1; }
-.goto-status .goto-active { color: #00e676; font-weight: bold; }
-.goto-status .goto-problem { color: #ffab00; font-weight: bold; }
-button.goto-stop { background: #d50000; color: white; padding: 4px 12px; font-size: 0.8rem; display: none; }
-button.goto-stop:hover { background: #ff1744; }
-.goto-hint { font-size: 0.7rem; color: #90a4ae; margin-top: 6px; }
-.wp-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
-.wp-table th { text-align: left; color: #90a4ae; font-weight: normal; padding: 4px 6px; border-bottom: 1px solid #ffffff22; }
-.wp-table td { padding: 4px 6px; border-bottom: 1px solid #ffffff10; font-family: 'Courier New', monospace; }
-.wp-table tbody tr { cursor: pointer; }
-.wp-table tbody tr:hover { background: #ffffff12; }
-.wp-table tbody tr.selected { background: #1e3a5f; }
-.wp-empty { color: #90a4ae; text-align: center; }
-.wp-btn { display: inline-block; padding: 2px 8px; cursor: pointer; color: #4fc3f7; font-size: 0.8rem; border: 1px solid #334; border-radius: 4px; margin-top: 6px; }
-.wp-btn:hover { background: #16213e; }
-.map-canvas { width: 100%; height: 300px; border: 1px solid #ffffff22; border-radius: 4px; background: #0d1b2a; }
-.map-legend { display: flex; gap: 12px; font-size: 0.7rem; margin-top: 4px; }
-.map-legend span { display: flex; align-items: center; gap: 4px; }
-.map-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-.map-odom { background: #90a4ae; }
-.map-wp { background: #4fc3f7; }
-.map-det { background: #ffab00; }
-.tof-row { display: flex; gap: 16px; align-items: center; }
-.tof-block { flex: 1; }
-.tof-label { font-size: 0.75rem; color: #90a4ae; margin-bottom: 2px; }
-.tof-value { font-family: 'Courier New', monospace; font-size: 1.3rem; font-weight: bold; }
-.tof-bar-wrap { height: 10px; background: #0d1b2a; border-radius: 5px; overflow: hidden; margin-top: 4px; }
-.tof-bar { height: 100%; border-radius: 5px; transition: width 0.15s, background 0.15s; }
-
-.zone-bars { display: flex; gap: 4px; align-items: flex-end; padding: 4px 0; }
-.zone-bar { flex: 1; border-radius: 4px 4px 0 0; min-height: 8px; transition: height 0.2s, background 0.2s; position: relative; }
-.zone-bar-label { text-align: center; font-size: 0.65rem; margin-top: 2px; color: #90a4ae; }
-
-.turning-indicator { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
-.turning-arrow { font-size: 2rem; line-height: 1; }
-.turning-text { font-size: 1.1rem; font-weight: bold; text-transform: uppercase; }
-.turning-forward { color: #00e676; }
-.turning-left, .turning-right { color: #ffab00; }
-.turning-stopped { color: #ff1744; }
-
-.ws-indicator { display: flex; align-items: center; gap: 6px; font-size: 0.8rem; margin-top: 4px; }
-.ws-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-.ws-dot.on { background: #00e676; }
-.ws-dot.off { background: #ff1744; }
-
-@media (max-width: 700px) { .camera-grid { grid-template-columns: 1fr; } .det-grid { grid-template-columns: 1fr; } }
-</style>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EcoBot Mission Control - Botanical OS V1.2</title>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "surface-variant": "#35343a",
+                        "surface-container-high": "#2a292f",
+                        "primary": "#4be277",
+                        "surface-container": "#1f1f24",
+                        "on-secondary-fixed-variant": "#004395",
+                        "on-primary-fixed": "#002109",
+                        "primary-container": "#22c55e",
+                        "surface": "#131318",
+                        "tertiary-fixed": "#ffdbca",
+                        "on-primary": "#003915",
+                        "inverse-primary": "#006e2f",
+                        "error": "#ffb4ab",
+                        "on-tertiary-fixed-variant": "#783200",
+                        "on-tertiary": "#552100",
+                        "on-primary-container": "#004b1e",
+                        "on-secondary-fixed": "#001a42",
+                        "on-primary-fixed-variant": "#005321",
+                        "on-tertiary-fixed": "#341100",
+                        "on-background": "#e4e1e8",
+                        "tertiary-container": "#ff8e4d",
+                        "background": "#131318",
+                        "surface-container-highest": "#35343a",
+                        "secondary-container": "#0566d9",
+                        "on-error": "#690005",
+                        "surface-dim": "#131318",
+                        "primary-fixed-dim": "#4ae176",
+                        "on-surface": "#e4e1e8",
+                        "outline-variant": "#3d4a3d",
+                        "surface-tint": "#4ae176",
+                        "tertiary": "#ffb792",
+                        "inverse-surface": "#e4e1e8",
+                        "on-secondary-container": "#e6ecff",
+                        "surface-container-lowest": "#0e0e13",
+                        "surface-bright": "#39393e",
+                        "error-container": "#93000a",
+                        "on-tertiary-container": "#6d2d00",
+                        "primary-fixed": "#6bff8f",
+                        "inverse-on-surface": "#303035",
+                        "secondary-fixed": "#d8e2ff",
+                        "secondary-fixed-dim": "#adc6ff",
+                        "surface-container-low": "#1b1b20",
+                        "on-error-container": "#ffdad6",
+                        "on-surface-variant": "#bccbb9",
+                        "outline": "#869585",
+                        "on-secondary": "#002e6a",
+                        "secondary": "#adc6ff",
+                        "tertiary-fixed-dim": "#ffb690"
+                    },
+                    borderRadius: {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    spacing: {
+                        "gutter": "16px",
+                        "unit": "4px",
+                        "panel-padding": "20px",
+                        "margin-safe": "32px"
+                    },
+                    fontFamily: {
+                        "body-lg": ["Inter"],
+                        "headline-sm": ["JetBrains Mono"],
+                        "label-caps": ["JetBrains Mono"],
+                        "headline-md": ["JetBrains Mono"],
+                        "body-sm": ["Inter"],
+                        "mono-data": ["JetBrains Mono"],
+                        "display-lg": ["JetBrains Mono"]
+                    },
+                    fontSize: {
+                        "body-lg": ["16px", { lineHeight: "1.5", letterSpacing: "0em", fontWeight: "400" }],
+                        "headline-sm": ["18px", { lineHeight: "1.2", letterSpacing: "0.1em", fontWeight: "600" }],
+                        "label-caps": ["12px", { lineHeight: "1", letterSpacing: "0.15em", fontWeight: "700" }],
+                        "headline-md": ["24px", { lineHeight: "1.2", letterSpacing: "0.05em", fontWeight: "600" }],
+                        "body-sm": ["14px", { lineHeight: "1.4", letterSpacing: "0em", fontWeight: "400" }],
+                        "mono-data": ["14px", { lineHeight: "1", letterSpacing: "0em", fontWeight: "500" }],
+                        "display-lg": ["48px", { lineHeight: "1.1", letterSpacing: "-0.02em", fontWeight: "700" }]
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .glass-panel {
+            background-color: rgba(27, 27, 32, 0.75);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .glow-active {
+            box-shadow: 0 0 2px rgba(75, 226, 119, 1), 0 0 15px rgba(75, 226, 119, 0.5);
+        }
+        .scanline {
+            background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,0), rgba(0,0,0,0.2), rgba(255,255,255,0));
+            background-size: 100% 4px;
+            animation: scanline 10s linear infinite;
+        }
+        @keyframes scanline {
+            0% { background-position: 0 0; }
+            100% { background-position: 0 100%; }
+        }
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-track { background: rgba(0,0,0,0.1); }
+        ::-webkit-scrollbar-thumb { background: #3d4a3d; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #4be277; }
+    </style>
 </head>
-<body>
-<h1 style="display:flex;align-items:center;gap:10px"><span class="status-dot disconnected" id="statusDot"></span> ecobot
-  <span style="margin-left:auto;font-size:0.8rem;font-weight:normal">
-    <a href="/map3d" style="color:#4fc3f7;text-decoration:none;padding:4px 12px;border:1px solid #334;border-radius:4px">3D Map</a>
-  </span>
-</h1>
+<body class="bg-surface text-on-surface min-h-screen overflow-x-hidden flex flex-col font-body-sm relative selection:bg-primary/30 selection:text-primary">
+<!-- Ambient Grid Background -->
+<div class="absolute inset-0 pointer-events-none opacity-[0.03]" style="background-image: radial-gradient(circle at 2px 2px, #e4e1e8 1px, transparent 0); background-size: 32px 32px;"></div>
 
-<div class="camera-grid">
-  <div class="card">
-    <h2>Camera Feed</h2>
-    <canvas class="camera-frame" id="cameraCanvas" width="640" height="360"></canvas>
-  </div>
-  <div>
-    <div class="card">
-      <h2>Robot Status</h2>
-      <div class="stat-row"><span class="stat-label">Position X</span><span class="stat-value" id="posX">0.00</span></div>
-      <div class="stat-row"><span class="stat-label">Position Y</span><span class="stat-value" id="posY">0.00</span></div>
-      <div class="stat-row"><span class="stat-label">Yaw</span><span class="stat-value" id="posYaw">0.00</span></div>
-      <div class="stat-row"><span class="stat-label">Mode</span><span class="badge cmd" id="modeBadge">CMD</span></div>
+<!-- Header (TopAppBar) -->
+<header class="fixed top-0 w-full z-50 bg-surface/80 backdrop-blur-xl border-b border-outline-variant/30 shadow-[0_2px_15px_rgba(75,226,119,0.2)] flex justify-between items-center px-margin-safe h-16 shrink-0">
+    <div class="flex items-center gap-6">
+        <div class="font-headline-md text-headline-md font-bold text-primary tracking-tighter flex items-center gap-2">
+            <span class="material-symbols-outlined text-[28px]" style="font-variation-settings: 'FILL' 1;">smart_toy</span>
+            EcoBot
+        </div>
+        <div class="h-6 w-px bg-outline-variant/50 hidden md:block"></div>
+        <div class="hidden md:flex items-center gap-4">
+            <div class="flex items-center gap-2">
+                <div id="wsDot" class="w-2 h-2 rounded-full bg-error"></div>
+                <span id="wsStatus" class="font-mono-data text-mono-data text-on-surface-variant">WS: CONNECTING</span>
+            </div>
+            <div class="glass-panel px-3 py-1 rounded flex items-center gap-2 border-primary/20 bg-primary/5">
+                <span class="material-symbols-outlined text-[16px] text-primary">explore</span>
+                <span class="font-mono-data text-mono-data text-on-surface">MODE: AUTONOMOUS_NAV</span>
+            </div>
+            <div class="glass-panel px-3 py-1 rounded flex items-center gap-2 border-primary/20 bg-primary/5">
+                <span class="material-symbols-outlined text-[16px] text-primary">route</span>
+                <span id="currentTaskLabel" class="font-mono-data text-mono-data text-on-surface">TASK: IDLE</span>
+            </div>
+        </div>
     </div>
-    <div class="card">
-      <h2>Velocity</h2>
-      <div class="stat-row"><span class="stat-label">Linear</span><span class="stat-value" id="velLinear">0.00</span></div>
-      <div class="stat-row"><span class="stat-label">Angular</span><span class="stat-value" id="velAngular">0.00</span></div>
+    <div class="flex items-center gap-4">
+        <div class="font-mono-data text-mono-data text-outline mr-4 text-right hidden lg:block">
+            MODE: <span id="modeVal" class="text-primary font-bold">CMD</span> | 
+            O YAW: <span id="yawVal" class="text-primary font-bold">0.0°</span><br/>
+            <span class="text-xs">X: <span id="posXVal">0.00</span> | Y: <span id="posYVal">0.00</span></span>
+        </div>
+        <button id="eStopBtn" onclick="emergencyStop()" class="bg-error-container/20 border-2 border-error text-error hover:bg-error hover:text-on-error px-4 py-2 rounded font-label-caps text-label-caps flex items-center gap-2 transition-all">
+            <span class="material-symbols-outlined text-[18px]">warning</span>
+            ESTOP
+        </button>
     </div>
-  </div>
-</div>
+</header>
 
-<div class="det-grid">
-  <div class="card">
-    <h2>Detection Feed</h2>
-    <canvas class="camera-frame" id="detectionCanvas" width="640" height="360"></canvas>
-  </div>
-  <div class="card">
-    <h2>Detected Objects <span class="badge cmd" id="detCount">0</span></h2>
-    <table class="det-table">
-      <thead>
-        <tr><th>Time</th><th>Class</th><th>Conf</th><th>Bounding Box</th></tr>
-      </thead>
-      <tbody id="detBody">
-        <tr><td colspan="4" class="det-empty">No objects detected</td></tr>
-      </tbody>
-    </table>
-    <div class="goto-hint">Click a row to drive to that object</div>
-    <div class="goto-bar">
-      <span class="goto-status" id="gotoStatus">Goto: IDLE</span>
-      <button class="goto-stop" id="gotoStopBtn">STOP</button>
+<!-- Side Navigation (SideNavBar) -->
+<nav class="fixed left-0 top-0 h-full w-64 z-40 bg-surface/90 backdrop-blur-md border-r border-outline-variant/30 flex flex-col pt-20 pb-8 px-4 transition-all duration-200 ease-in-out hidden lg:flex">
+    <div class="mb-6 px-4 flex items-center gap-3">
+        <div class="w-10 h-10 rounded bg-surface-container-highest border border-outline-variant/50 flex items-center justify-center shrink-0">
+            <span class="material-symbols-outlined text-primary" style="font-variation-settings: 'FILL' 1;">smart_toy</span>
+        </div>
+        <div>
+            <div class="font-headline-sm text-headline-sm text-primary">SYNTHESIS_CORE</div>
+            <div class="font-mono-data text-[10px] text-on-surface-variant">AR_ENABLED</div>
+        </div>
     </div>
-  </div>
-</div>
+    <div class="flex-1 space-y-1">
+        <a class="bg-primary/20 text-primary border-l-4 border-primary px-4 py-3 flex items-center gap-3 font-semibold shadow-[inset_2px_0_10px_rgba(75,226,119,0.1)] transition-colors font-mono-data" href="index.html">
+            <span class="material-symbols-outlined text-[20px]" style="font-variation-settings: 'FILL' 1;">analytics</span>
+            <span class="font-mono-data text-mono-data">Fleet</span>
+        </a>
+        <a class="text-on-surface-variant border-l-4 border-transparent px-4 py-3 flex items-center gap-3 hover:text-on-surface hover:bg-surface-container-highest transition-colors font-mono-data" href="diagnostics.html">
+            <span class="material-symbols-outlined text-[20px]">biotech</span>
+            <span class="font-mono-data text-mono-data">Diagnostics</span>
+        </a>
+        <a class="text-on-surface-variant border-l-4 border-transparent px-4 py-3 flex items-center gap-3 hover:text-on-surface hover:bg-surface-container-highest transition-colors font-mono-data" href="prediction.html">
+            <span class="material-symbols-outlined text-[20px]">timeline</span>
+            <span class="font-mono-data text-mono-data">Prediction</span>
+        </a>
+        <a class="text-on-surface-variant border-l-4 border-transparent px-4 py-3 flex items-center gap-3 hover:text-on-surface hover:bg-surface-container-highest transition-colors font-mono-data" href="archive.html">
+            <span class="material-symbols-outlined text-[20px]">inventory_2</span>
+            <span class="font-mono-data text-mono-data">Archive</span>
+        </a>
+        <a class="text-on-surface-variant border-l-4 border-transparent px-4 py-3 flex items-center gap-3 hover:text-on-surface hover:bg-surface-container-highest transition-colors font-mono-data" href="system.html">
+            <span class="material-symbols-outlined text-[20px]">settings</span>
+            <span class="font-mono-data text-mono-data">System</span>
+        </a>
+        <a class="text-on-surface-variant border-l-4 border-transparent px-4 py-3 flex items-center gap-3 hover:text-on-surface hover:bg-surface-container-highest transition-colors font-mono-data" href="boot.html">
+            <span class="material-symbols-outlined text-[20px]">restart_alt</span>
+            <span class="font-mono-data text-mono-data">Boot OS</span>
+        </a>
+        <a class="text-on-surface-variant border-l-4 border-transparent px-4 py-3 flex items-center gap-3 hover:text-on-surface hover:bg-surface-container-highest transition-colors font-mono-data" href="logs.html">
+            <span class="material-symbols-outlined text-[20px]">terminal</span>
+            <span class="font-mono-data text-mono-data">Logs</span>
+        </a>
+    </div>
+</nav>
 
-<div class="card">
-  <h2>Saved Locations <span class="badge cmd" id="wpCount">0</span></h2>
-  <table class="wp-table">
-    <thead><tr><th>Object</th><th>X</th><th>Y</th></tr></thead>
-    <tbody id="wpBody">
-      <tr><td colspan="3" class="wp-empty">No locations saved yet</td></tr>
-    </tbody>
-  </table>
-  <span class="wp-btn" onclick="clearWaypoints()" style="margin-top:8px">Clear All</span>
-</div>
+<!-- Main Workspace -->
+<main class="flex-1 mt-16 lg:pl-64 p-gutter grid grid-cols-1 lg:grid-cols-12 gap-gutter lg:h-[calc(100vh-4rem)] overflow-y-auto pb-20 lg:pb-gutter">
+    <!-- Center Area (Visuals) -->
+    <div class="col-span-1 lg:col-span-7 flex flex-col gap-gutter lg:h-full">
+        <!-- Panel Tabs -->
+        <div class="flex items-center gap-2 shrink-0">
+            <button onclick="switchTab('scan')" id="tabScanBtn" class="flex-1 py-2 px-3 font-label-caps text-label-caps tracking-widest border transition-colors rounded bg-primary/20 text-primary border-primary flex items-center justify-center gap-2">
+                <span class="material-symbols-outlined text-[16px]">filter_center_focus</span> DEEP SCAN
+            </button>
+            <button onclick="switchTab('log')" id="tabLogBtn" class="flex-1 py-2 px-3 font-label-caps text-label-caps tracking-widest border border-outline-variant text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-colors rounded flex items-center justify-center gap-2">
+                <span class="material-symbols-outlined text-[16px]">terminal</span> LOG
+            </button>
+        </div>
+        <div id="scanTab" class="flex flex-col gap-gutter flex-1 min-h-0">
+        <!-- Main Camera Feed (AR View) -->
+        <div class="relative min-h-[50vh] lg:min-h-0 lg:flex-1 glass-panel rounded-lg overflow-hidden group flex flex-col justify-center items-center bg-black/60">
+            <video id="mainCameraVideo" autoplay playsinline muted class="w-full h-full object-contain hidden"></video>
+            <canvas id="mainCameraCanvas" class="w-full h-full object-contain"></canvas>
+            <canvas id="bboxOverlayCanvas" class="absolute inset-0 w-full h-full object-contain pointer-events-none"></canvas>
+            <div class="absolute inset-0 scanline pointer-events-none"></div>
+            
+            <!-- AR Overlay Elements -->
+            <div class="absolute inset-0 border border-primary/20 z-10 m-2 rounded pointer-events-none flex flex-col">
+                <div class="flex justify-between p-2">
+                    <div class="font-label-caps text-[10px] text-primary bg-surface/80 backdrop-blur px-2 py-1 rounded flex items-center gap-2">
+                        <span id="feedLabelTag">LIVE_FEED: Depth Camera (YOLO)</span>
+                        <button onclick="switchFeed()" class="pointer-events-auto hover:text-primary-fixed underline text-[9px]">(SWITCH)</button>
+                    </div>
+                    <div class="font-mono-data text-[10px] text-white bg-error/80 backdrop-blur px-2 py-1 rounded flex items-center gap-1">
+                        <span id="rtcBadgeDot" class="w-1.5 h-1.5 rounded-full bg-white animate-pulse"></span> <span id="rtcBadgeText">LIVE (RTC)</span>
+                    </div>
+                </div>
+            </div>
 
-<div class="card">
-  <h2>Map</h2>
-  <canvas class="map-canvas" id="mapCanvas" width="600" height="300"></canvas>
-  <div class="map-legend">
-    <span><span class="map-dot map-odom"></span> Odom trace</span>
-    <span><span class="map-dot map-wp"></span> Saved locations</span>
-    <span><span class="map-dot map-det"></span> Detections</span>
-  </div>
-</div>
+            <!-- VLA Input Field Overlay -->
+            <div class="absolute bottom-4 left-1/2 -translate-x-1/2 w-[90%] max-w-lg z-20">
+                <div class="glass-panel p-2 rounded-lg flex items-center gap-2 shadow-[0_4px_20px_rgba(0,0,0,0.5)]">
+                    <span class="material-symbols-outlined text-outline ml-2">terminal</span>
+                    <input id="vlaInput" class="w-full bg-transparent border-none text-on-surface font-mono-data text-mono-data placeholder-outline-variant focus:ring-0 focus:outline-none" placeholder="Enter VLA override prompt e.g. inspect leaves..." type="text" onkeydown="if(event.key==='Enter') sendVlaPrompt()"/>
+                    <button onclick="sendVlaPrompt()" class="bg-primary/20 hover:bg-primary/40 text-primary border border-primary/50 px-4 py-2 rounded font-label-caps text-[10px] transition-colors shrink-0">EXECUTE</button>
+                </div>
+            </div>
+        </div>
 
-<div class="card">
-  <h2>TOF Sensor <span class="badge cmd" id="tofBadge">--</span></h2>
-  <div class="tof-row">
-    <div class="tof-block">
-      <div class="tof-label">TOF left</div>
-      <div class="tof-value" id="tofVal0">-- m</div>
-      <div class="tof-bar-wrap"><div class="tof-bar" id="tofBar0" style="width:0%"></div></div>
-    </div>
-    <div class="tof-block">
-      <div class="tof-label">TOF right</div>
-      <div class="tof-value" id="tofVal1">-- m</div>
-      <div class="tof-bar-wrap"><div class="tof-bar" id="tofBar1" style="width:0%"></div></div>
-    </div>
-  </div>
-</div>
+        <!-- Lower Visuals Row -->
+        <div class="min-h-[220px] lg:h-1/3 grid grid-cols-1 sm:grid-cols-2 gap-gutter shrink-0">
+            <!-- 3D Point Cloud Viewer -->
+            <div class="glass-panel rounded-lg relative overflow-hidden flex flex-col border-r-4 border-r-secondary-container min-h-[220px] sm:min-h-0">
+                <div class="px-3 py-2 border-b border-white/5 flex justify-between items-center bg-surface/50 z-10 shrink-0">
+                    <span class="font-label-caps text-label-caps text-outline">POINT CLOUD (3D)</span>
+                    <a href="/map3d" class="material-symbols-outlined text-[16px] text-primary hover:text-primary-fixed" title="Open Full 3D Map">open_in_new</a>
+                </div>
+                <div id="threejsContainer" class="relative flex-1 w-full h-full bg-black/40"></div>
+            </div>
 
-<div class="card">
-  <h2>Obstacle Detection</h2>
-  <div class="stat-row">
-    <span class="stat-label">Turning Status</span>
-    <span id="turningIndicator">
-      <span class="turning-arrow">&#x2191;</span>
-      <span class="turning-text turning-forward" id="turningText">FORWARD</span>
-    </span>
-  </div>
-  <div style="margin-top: 8px;">
-    <div class="stat-label" style="margin-bottom: 4px;">Zone Distances (m)</div>
-    <div class="zone-bars" id="zoneBars">
-      <div class="zone-bar" style="height:40px;background:#444;"><div class="zone-bar-label">Z1</div></div>
-      <div class="zone-bar" style="height:40px;background:#444;"><div class="zone-bar-label">Z2</div></div>
-      <div class="zone-bar" style="height:40px;background:#444;"><div class="zone-bar-label">Z3</div></div>
-      <div class="zone-bar" style="height:40px;background:#444;"><div class="zone-bar-label">Z4</div></div>
-      <div class="zone-bar" style="height:40px;background:#444;"><div class="zone-bar-label">Z5</div></div>
+            <!-- 2D AMCL Nav Map -->
+            <div class="glass-panel rounded-lg relative overflow-hidden flex flex-col border-l-4 border-l-tertiary-container min-h-[220px] sm:min-h-0">
+                <div class="px-3 py-2 border-b border-white/5 flex justify-between items-center bg-surface/50 z-10 shrink-0">
+                    <span class="font-label-caps text-label-caps text-outline">NAV MAP (AMCL)</span>
+                    <span class="material-symbols-outlined text-[16px] text-outline">map</span>
+                </div>
+                <div class="relative flex-1 bg-surface-container-lowest p-1 overflow-hidden">
+                    <canvas id="navMapCanvas" class="w-full h-full object-contain rounded"></canvas>
+                </div>
+            </div>
+        </div>
+        </div>
+        <div id="logTab" class="hidden flex-1 flex-col bg-black/40 border border-outline-variant/30 rounded overflow-hidden min-h-0">
+            <div class="px-3 py-2 border-b border-white/5 flex justify-between items-center bg-surface-container-high/60 shrink-0">
+                <span class="font-label-caps text-label-caps text-on-surface-variant">REASONING LOG</span>
+                <span id="logCount" class="font-mono-data text-[10px] text-outline">0 ENTRIES</span>
+            </div>
+            <div id="logScroll" class="flex-1 overflow-y-auto min-h-0">
+                <table class="w-full font-mono-data text-[10px] text-left">
+                    <thead class="sticky top-0 bg-surface-container-high/95 text-on-surface-variant">
+                        <tr class="border-b border-white/5">
+                            <th class="px-2 py-1.5 whitespace-nowrap">SOURCE</th>
+                            <th class="px-2 py-1.5">WHAT HAPPENED</th>
+                            <th class="px-2 py-1.5 text-right whitespace-nowrap">LEVEL</th>
+                        </tr>
+                    </thead>
+                    <tbody id="reasoningLog"></tbody>
+                </table>
+            </div>
+        </div>
     </div>
-    <div style="display:flex;gap:8px;margin-top:6px;font-size:0.7rem;">
-      <span style="color:#00e676;">&#x25A0; clear</span>
-      <span style="color:#ffab00;">&#x25A0; warn</span>
-      <span style="color:#ff1744;">&#x25A0; danger</span>
-    </div>
-  </div>
-  <div class="ws-indicator">
-    <span class="ws-dot off" id="wsDot"></span>
-    <span id="wsLabel">Dashboard WS disconnected</span>
-  </div>
-</div>
 
-<div class="card">
-  <h2>Manual Control</h2>
-  <div class="controls">
-    <div class="joystick-container">
-      <canvas id="joystickCanvas" width="200" height="200"></canvas>
+    <!-- Right Side Columns (Data & Control) -->
+    <div class="flex flex-col col-span-1 lg:col-span-5 lg:h-full gap-gutter min-h-0 lg:overflow-hidden">
+        <!-- Top Half: System & Reasoning Activity -->
+        <div class="grid grid-cols-1 gap-gutter h-[320px] lg:h-[40%] min-h-0 lg:overflow-hidden">
+            <!-- Subsystem Health -->
+            <div class="glass-panel rounded-lg flex flex-col h-[320px] sm:h-full min-h-0 overflow-hidden">
+                <div class="px-4 py-3 border-b border-white/5 flex justify-between items-center bg-surface/30 shrink-0">
+                    <span class="font-label-caps text-label-caps text-on-surface">SUBSYSTEM STATUS</span>
+                </div>
+                <div class="p-3 flex-1 overflow-y-auto grid grid-cols-2 gap-2 content-start min-h-0">
+                    <div class="flex items-center gap-2 bg-surface/50 p-2 rounded border border-white/5">
+                        <span class="material-symbols-outlined text-[16px] text-primary shrink-0">settings</span>
+                        <div class="flex-1 min-w-0">
+                            <div class="font-mono-data text-[10px] text-on-surface-variant truncate">Motor_L/R</div>
+                            <div class="flex items-center gap-1.5">
+                                <span class="font-mono-data text-[10px] text-primary">OK</span>
+                                <div class="w-1.5 h-1.5 rounded-full bg-primary"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2 bg-surface/50 p-2 rounded border border-white/5">
+                        <span class="material-symbols-outlined text-[16px] text-primary shrink-0">3d_rotation</span>
+                        <div class="flex-1 min-w-0">
+                            <div class="font-mono-data text-[10px] text-on-surface-variant truncate">Depth_Sens</div>
+                            <div class="flex items-center gap-1.5">
+                                <span id="depthSubStatus" class="font-mono-data text-[10px] text-primary">OK</span>
+                                <div class="w-1.5 h-1.5 rounded-full bg-primary"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2 bg-surface/50 p-2 rounded border border-white/5">
+                        <span class="material-symbols-outlined text-[16px] text-primary shrink-0">sensors</span>
+                        <div class="flex-1 min-w-0">
+                            <div class="font-mono-data text-[10px] text-on-surface-variant truncate">ToF_Array</div>
+                            <div class="flex items-center gap-1.5">
+                                <span id="tofBadgeState" class="font-mono-data text-[10px] text-primary">ONLINE</span>
+                                <div id="tofBadgeDot" class="w-1.5 h-1.5 rounded-full bg-primary"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2 bg-surface/50 p-2 rounded border border-white/5">
+                        <span class="material-symbols-outlined text-[16px] text-primary shrink-0">bolt</span>
+                        <div class="flex-1 min-w-0">
+                            <div class="font-mono-data text-[10px] text-on-surface-variant truncate">Power_Mon</div>
+                            <div class="flex items-center gap-1.5">
+                                <span class="font-mono-data text-[10px] text-primary">OK</span>
+                                <div class="w-1.5 h-1.5 rounded-full bg-primary"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2 bg-surface/50 p-2 rounded border border-white/5">
+                        <span class="material-symbols-outlined text-[16px] text-primary shrink-0">water_drop</span>
+                        <div class="flex-1 min-w-0">
+                            <div class="font-mono-data text-[10px] text-on-surface-variant truncate">Pump/Relay</div>
+                            <div class="flex items-center gap-1.5">
+                                <span class="font-mono-data text-[10px] text-primary">OK</span>
+                                <div class="w-1.5 h-1.5 rounded-full bg-primary"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2 bg-surface/50 p-2 rounded border border-white/5">
+                        <span class="material-symbols-outlined text-[16px] text-primary shrink-0">eco</span>
+                        <div class="flex-1 min-w-0">
+                            <div class="font-mono-data text-[10px] text-on-surface-variant truncate">Environmental_Mode</div>
+                            <div class="flex items-center gap-1.5">
+                                <span class="font-mono-data text-[10px] text-primary">ONLINE</span>
+                                <div class="w-1.5 h-1.5 rounded-full bg-primary"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom Half: Control & Arm Manipulator -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-gutter lg:h-[60%] min-h-0">
+            <!-- Robotic Arm Manipulator -->
+            <div class="glass-panel rounded-lg flex flex-col h-full min-h-[320px] lg:min-h-0">
+                <div class="px-4 py-2 border-b border-white/5 flex justify-between items-center bg-surface/30">
+                    <span class="font-label-caps text-label-caps text-primary">ROBOTIC ARM</span>
+                    <span id="armStatusLabel" class="font-mono-data text-[10px] text-outline">READY</span>
+                </div>
+                <div class="p-4 flex-1 flex flex-col gap-4 justify-center overflow-y-auto">
+                    <div class="space-y-4">
+                        <div>
+                            <div class="flex justify-between font-mono-data text-[10px]">
+                                <span class="text-on-surface-variant">J1_BASE (0°-220°)</span>
+                                <span id="j1Val" class="text-primary">107.0°</span>
+                            </div>
+                            <input id="j1Slider" type="range" min="0" max="220" value="107" oninput="sendArmJoints()" class="w-full h-1 bg-surface-container-high rounded appearance-none accent-primary">
+                        </div>
+                        <div>
+                            <div class="flex justify-between font-mono-data text-[10px]">
+                                <span class="text-on-surface-variant">J2_SHOULDER (0°-125°)</span>
+                                <span id="j2Val" class="text-primary">125.0°</span>
+                            </div>
+                            <input id="j2Slider" type="range" min="0" max="125" value="125" oninput="sendArmJoints()" class="w-full h-1 bg-surface-container-high rounded appearance-none accent-primary">
+                        </div>
+                        <div>
+                            <div class="flex justify-between font-mono-data text-[10px]">
+                                <span class="text-on-surface-variant">J3_ELBOW (0°-180°)</span>
+                                <span id="j3Val" class="text-primary">180.0°</span>
+                            </div>
+                            <input id="j3Slider" type="range" min="0" max="180" value="180" oninput="sendArmJoints()" class="w-full h-1 bg-surface-container-high rounded appearance-none accent-primary">
+                        </div>
+                        <div>
+                            <div class="flex justify-between font-mono-data text-[10px]">
+                                <span class="text-on-surface-variant">J4_WRIST (0°-180°)</span>
+                                <span id="j4Val" class="text-primary">45.0°</span>
+                            </div>
+                            <input id="j4Slider" type="range" min="0" max="180" value="45" oninput="sendArmJoints()" class="w-full h-1 bg-surface-container-high rounded appearance-none accent-primary">
+                        </div>
+                    </div>
+                    <div class="pt-4 border-t border-white/5">
+                        <span class="font-mono-data text-[10px] text-on-surface-variant block mb-1">Pose Goal (X, Y, Z)</span>
+                        <div class="flex gap-1">
+                            <input id="armGoalX" type="number" step="0.05" value="0.30" class="w-12 bg-surface-container-high border border-outline-variant text-primary font-mono-data text-[10px] p-1 rounded">
+                            <input id="armGoalY" type="number" step="0.05" value="0.00" class="w-12 bg-surface-container-high border border-outline-variant text-primary font-mono-data text-[10px] p-1 rounded">
+                            <input id="armGoalZ" type="number" step="0.05" value="0.20" class="w-12 bg-surface-container-high border border-outline-variant text-primary font-mono-data text-[10px] p-1 rounded">
+                            <button onclick="sendArmPoseGoal()" class="bg-primary/20 hover:bg-primary/40 text-primary border border-primary/50 text-[10px] font-label-caps px-2 py-1 rounded flex-1">GO</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Manual Drive Controls -->
+            <div class="glass-panel rounded-lg flex flex-col h-full min-h-[320px] lg:min-h-0">
+                <div class="px-4 py-2 border-b border-white/5 flex justify-between items-center bg-surface/30">
+                    <span class="font-label-caps text-label-caps text-on-surface">MANUAL DRIVE</span>
+                    <span class="w-2 h-2 rounded-full bg-primary"></span>
+                </div>
+                <div class="p-4 flex-1 flex flex-col items-center justify-center gap-6 overflow-y-auto">
+                    <div id="joystickZone" class="w-32 h-32 bg-surface-container-high rounded-full border border-primary/30 relative flex items-center justify-center cursor-pointer">
+                        <div id="joystickKnob" class="w-10 h-10 rounded-full bg-primary/40 border border-primary shadow-[0_0_10px_rgba(75,226,119,0.5)] absolute transition-transform"></div>
+                    </div>
+                    <div class="w-full max-w-[180px] flex flex-col gap-1 text-center">
+                        <span class="font-mono-data text-[10px] text-on-surface-variant">Speed Limit</span>
+                        <input id="speedSlider" type="range" min="0.05" max="1.0" step="0.05" value="0.3" class="w-full h-1 bg-surface-container-high rounded appearance-none accent-primary">
+                    </div>
+                    <!-- TOF Sensor Live Gauges -->
+                    <div class="w-full max-w-[180px] pt-2 border-t border-white/5 space-y-1.5">
+                        <div>
+                            <div class="flex justify-between font-mono-data text-[10px]">
+                                <span class="text-on-surface-variant">TOF LEFT (S1)</span>
+                                <span id="tofLeftVal" class="text-primary font-bold">-- m</span>
+                            </div>
+                            <div class="w-full bg-surface-container-high h-1 rounded overflow-hidden">
+                                <div id="tofLeftBar" class="bg-primary h-full rounded transition-all duration-300" style="width:0%"></div>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="flex justify-between font-mono-data text-[10px]">
+                                <span class="text-on-surface-variant">TOF RIGHT (S2)</span>
+                                <span id="tofRightVal" class="text-primary font-bold">-- m</span>
+                            </div>
+                            <div class="w-full bg-surface-container-high h-1 rounded overflow-hidden">
+                                <div id="tofRightBar" class="bg-primary h-full rounded transition-all duration-300" style="width:0%"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
-    <div>
-      <div style="margin-bottom:8px">Speed: <span id="speedLabel">0.30</span></div>
-      <input type="range" id="speedSlider" min="0.05" max="1.0" step="0.05" value="0.30">
-    </div>
-  </div>
-  <div style="margin-top:8px">
-    <button class="emergency" id="emergencyBtn">EMERGENCY STOP</button>
-  </div>
-</div>
+</main>
+
+<!-- Bottom Nav for Mobile -->
+<nav class="lg:hidden fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-gutter py-2 bg-surface-container-lowest/90 backdrop-blur-lg border-t border-primary/20 shadow-[0_-5px_20px_rgba(75,226,119,0.15)] h-16">
+    <a class="flex flex-col items-center text-primary glow-active px-3 py-1 bg-primary/20 rounded-xl font-label-caps text-[10px]" href="index.html">
+        <span class="material-symbols-outlined text-[20px]" style="font-variation-settings: 'FILL' 1;">analytics</span> Fleet
+    </a>
+    <a class="flex flex-col items-center text-on-surface-variant hover:text-primary font-label-caps text-[10px]" href="diagnostics.html">
+        <span class="material-symbols-outlined text-[20px]">biotech</span> Diag
+    </a>
+    <a class="flex flex-col items-center text-on-surface-variant hover:text-primary font-label-caps text-[10px]" href="prediction.html">
+        <span class="material-symbols-outlined text-[20px]">timeline</span> Predict
+    </a>
+    <a class="flex flex-col items-center text-on-surface-variant hover:text-primary font-label-caps text-[10px]" href="archive.html">
+        <span class="material-symbols-outlined text-[20px]">inventory_2</span> Arch
+    </a>
+    <a class="flex flex-col items-center text-on-surface-variant hover:text-primary font-label-caps text-[10px]" href="logs.html">
+        <span class="material-symbols-outlined text-[20px]">terminal</span> Logs
+    </a>
+</nav>
 
 <script>
-var wsAddress = 'ws://' + location.hostname + ':8080/ws';
-var dashboardWs = null;
+    const wsProtocol = location.protocol === 'https:' ? 'wss://' : 'ws://';
+    const wsUrl = wsProtocol + location.host + '/ws';
+    let ws = null;
 
-var cameraCanvas = document.getElementById('cameraCanvas');
-var cameraCtx = cameraCanvas.getContext('2d');
-var camImage = new Image();
+    const wsDot = document.getElementById('wsDot');
+    const wsStatus = document.getElementById('wsStatus');
+    const mainCameraCanvas = document.getElementById('mainCameraCanvas');
+    const mainCameraCtx = mainCameraCanvas.getContext('2d');
+    const bboxOverlayCanvas = document.getElementById('bboxOverlayCanvas');
+    const bboxOverlayCtx = bboxOverlayCanvas.getContext('2d');
+    let latestDetections = [];
+    const navMapCanvas = document.getElementById('navMapCanvas');
+    const navMapCtx = navMapCanvas.getContext('2d');
+    const reasoningLog = document.getElementById('reasoningLog');
+    const logScroll = document.getElementById('logScroll');
+    const logCount = document.getElementById('logCount');
+    const SOURCE_LABELS = {
+        vision: 'VISION',
+        mode: 'MODE',
+        goto: 'NAV',
+        mission: 'MISSION',
+        scanner: 'SCANNER',
+        vla: 'VLA',
+        arm: 'ARM',
+        gemini_live: 'GEMINI',
+        system: 'SYSTEM',
+    };
+    const mainCamImg = new Image();
+    const mapImg = new Image();
 
-var detectionCanvas = document.getElementById('detectionCanvas');
-var detectionCtx = detectionCanvas.getContext('2d');
-var detImage = new Image();
-var detBody = document.getElementById('detBody');
-var detCount = document.getElementById('detCount');
-var gotoStatusEl = document.getElementById('gotoStatus');
-var gotoStopBtn = document.getElementById('gotoStopBtn');
-var wpBody = document.getElementById('wpBody');
-var wpCount = document.getElementById('wpCount');
-var lastWaypoints = [];
-var lastDets = [];
-var selectedRowIdx = -1;
-var mapCanvas = document.getElementById('mapCanvas');
-var mapCtx = mapCanvas.getContext('2d');
-var odomTrace = [];
-var MAX_TRACE = 200;
-var lastOdomX = 0, lastOdomY = 0, lastOdomYaw = 0;
-var mapCX = 0, mapCY = 0;
+    let feedType = 'detection_image';
+    let lastOdom = { x: 0, y: 0, yaw: 0 };
+    let lastMap = null;
+    let actualPath = [];
+    let rtcPeer = null;
+    let rtcConnected = false;
+    let rtcDataChannel = null;
 
-function selectGotoTarget(idx) {
-  if (!dashboardWs || dashboardWs.readyState !== 1) return;
-  if (idx < 0 || idx >= lastDets.length) return;
-  selectedRowIdx = idx;
-  dashboardWs.send(JSON.stringify({
-    type: 'goto_select', data: lastDets[idx]
-  }));
-  renderDetections(lastDets);
-}
-
-function updateGotoStatus(data) {
-  var status = data.status || 'IDLE';
-  var cls = data.target_class || '';
-  var text = 'Goto: ' + status;
-  if (cls) text += ' (' + cls + ')';
-  if (status === 'TRACKING' && typeof data.distance === 'number') {
-    text += ' — ' + data.distance.toFixed(2) + 'm';
-  }
-  var span = (status === 'TRACKING') ?
-    '<span class="goto-active">' + text + '</span>' :
-    (status === 'SEARCHING') ?
-    '<span class="goto-active">' + text + ' &#x1F50D;</span>' :
-    (status === 'LOST' || status === 'REACHED' || status === 'BLOCKED') ?
-    '<span class="goto-problem">' + text + '</span>' : text;
-  gotoStatusEl.innerHTML = span;
-  gotoStopBtn.style.display = (status === 'TRACKING' || status === 'BLOCKED') ? 'inline-block' : 'none';
-}
-
-gotoStopBtn.addEventListener('click', function() {
-  if (dashboardWs && dashboardWs.readyState === 1) {
-    dashboardWs.send(JSON.stringify({ type: 'goto_cancel' }));
-  }
-});
-
-function renderWaypoints(data) {
-  var wps = Array.isArray(data) ? data : [];
-  lastWaypoints = wps;
-  wpCount.textContent = wps.length;
-  if (wps.length === 0) {
-    var ts = new Date().toLocaleTimeString();
-    wpBody.innerHTML = '<tr><td colspan="3" class="wp-empty">No locations yet (last check: ' +
-      ts + ', type=' + (typeof data) + ')</td></tr>';
-    return;
-  }
-  var html = '';
-  for (var i = 0; i < wps.length; i++) {
-    var w = wps[i];
-    var distStr = (w.z != null) ? ' @' + w.z.toFixed(2) + 'm' : '';
-    var nearStr = '';
-    if (w.nearby && w.nearby.length > 0) {
-      var names = [];
-      for (var j = 0; j < w.nearby.length; j++) {
-        names.push(w.nearby[j].class_name + '(' + w.nearby[j].distance.toFixed(1) + 'm)');
-      }
-      nearStr = '<br><small style="color:#90a4ae">nearby: ' + names.join(', ') + '</small>';
+    function sendControl(obj) {
+        const jsonStr = JSON.stringify(obj);
+        if (rtcDataChannel && rtcDataChannel.readyState === 'open') {
+            rtcDataChannel.send(jsonStr);
+        } else if (ws && ws.readyState === 1) {
+            ws.send(jsonStr);
+        }
     }
-    html += '<tr onclick="gotoWaypoint(' + i + ')"><td>' + (w.class_name || '?') + distStr + nearStr +
-      '</td><td>' + (w.x != null ? w.x.toFixed(2) : '?') +
-      '</td><td>' + (w.y != null ? w.y.toFixed(2) : '?') + '</td></tr>';
-  }
-  wpBody.innerHTML = html;
-}
 
-function gotoWaypoint(idx) {
-  if (!dashboardWs || dashboardWs.readyState !== 1) return;
-  if (idx < 0 || idx >= lastWaypoints.length) return;
-  dashboardWs.send(JSON.stringify({ type: 'goto_waypoint', index: idx }));
-}
+    async function startWebRTC(feed = 'detection') {
+        try {
+            if (rtcPeer) {
+                try { rtcPeer.close(); } catch(e){}
+                rtcPeer = null;
+            }
 
-function drawMap(odomX, odomY, odomYaw) {
-  var w = mapCanvas.width, h = mapCanvas.height;
-  mapCtx.fillStyle = '#0d1b2a';
-  mapCtx.fillRect(0, 0, w, h);
+            const pc = new RTCPeerConnection({
+                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+            });
+            rtcPeer = pc;
 
-  // auto-zoom: fit robot + waypoints + trace with padding
-  var pts = [[odomX, odomY]];
-  for (var i = 0; i < lastWaypoints.length; i++)
-    pts.push([lastWaypoints[i].x, lastWaypoints[i].y]);
-  for (var k = 0; k < odomTrace.length; k++)
-    pts.push([odomTrace[k].x, odomTrace[k].y]);
-  var minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9;
-  for (var p = 0; p < pts.length; p++) {
-    minX = Math.min(minX, pts[p][0]); maxX = Math.max(maxX, pts[p][0]);
-    minY = Math.min(minY, pts[p][1]); maxY = Math.max(maxY, pts[p][1]);
-  }
-  var spanX = Math.max(maxX - minX, 4);
-  var spanY = Math.max(maxY - minY, 4);
-  var pad = 1.5;
-  var s = Math.min(w / (spanX + 2 * pad), h / (spanY + 2 * pad));
-  var cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
-  var ox = cx - w / 2 / s;
-  var oy = cy - h / 2 / s;
+            // Open low-latency UDP data channel for real-time control
+            const dc = pc.createDataChannel('control', { ordered: false, maxRetransmits: 0 });
+            rtcDataChannel = dc;
 
-  function w2c(wx, wy) { return [(wx - ox) * s, h - (wy - oy) * s]; }
+            dc.onopen = () => {
+                logReasoning('system', 'RTC DataChannel active (ultra-low latency UDP control)', 'info');
+            };
 
-  // grid with coordinate labels every 2m
-  mapCtx.strokeStyle = '#ffffff10';
-  mapCtx.fillStyle = '#5a7a9a';
-  mapCtx.font = '9px monospace';
-  mapCtx.lineWidth = 0.5;
-  var gx0 = Math.floor(ox), gy0 = Math.floor(oy);
-  for (var gx = gx0; gx <= gx0 + Math.ceil(w / s); gx++) {
-    var sx = (gx - ox) * s;
-    mapCtx.beginPath(); mapCtx.moveTo(sx, 0); mapCtx.lineTo(sx, h); mapCtx.stroke();
-    if (gx % 2 === 0) mapCtx.fillText(gx + 'm', sx + 2, h - 4);
-  }
-  for (var gy = gy0; gy <= gy0 + Math.ceil(h / s); gy++) {
-    var sy = h - (gy - oy) * s;
-    mapCtx.beginPath(); mapCtx.moveTo(0, sy); mapCtx.lineTo(w, sy); mapCtx.stroke();
-    if (gy % 2 === 0) mapCtx.fillText(gy + 'm', 2, sy - 2);
-  }
+            dc.onmessage = (event) => {
+                const lines = event.data.split('\n');
+                for (let line of lines) {
+                    if (!line) continue;
+                    try {
+                        const msg = JSON.parse(line);
+                        handleMessage(msg);
+                    } catch(e) {}
+                }
+            };
 
-  // origin marker
-  var o = w2c(0, 0);
-  if (o[0] > 0 && o[1] > 0 && o[0] < w && o[1] < h) {
-    mapCtx.strokeStyle = '#546e7a'; mapCtx.lineWidth = 1;
-    mapCtx.beginPath();
-    mapCtx.moveTo(o[0] - 6, o[1]); mapCtx.lineTo(o[0] + 6, o[1]);
-    mapCtx.moveTo(o[0], o[1] - 6); mapCtx.lineTo(o[0], o[1] + 6);
-    mapCtx.stroke();
-    mapCtx.fillStyle = '#546e7a'; mapCtx.fillText('0,0', o[0] + 8, o[1] + 4);
-  }
+            dc.onclose = () => {
+                rtcDataChannel = null;
+            };
 
-  // odom trace
-  if (odomTrace.length > 1) {
-    mapCtx.strokeStyle = '#78909c';
-    mapCtx.lineWidth = 1.5;
-    mapCtx.beginPath();
-    var t0 = w2c(odomTrace[0].x, odomTrace[0].y);
-    mapCtx.moveTo(t0[0], t0[1]);
-    for (var k = 1; k < odomTrace.length; k++) {
-      var pt = w2c(odomTrace[k].x, odomTrace[k].y);
-      mapCtx.lineTo(pt[0], pt[1]);
+            pc.ontrack = (event) => {
+                const videoEl = document.getElementById('mainCameraVideo');
+                const canvasEl = document.getElementById('mainCameraCanvas');
+                if (event.streams && event.streams[0]) {
+                    videoEl.srcObject = event.streams[0];
+                } else {
+                    videoEl.srcObject = new MediaStream([event.track]);
+                }
+                videoEl.classList.remove('hidden');
+                canvasEl.classList.add('hidden');
+                rtcConnected = true;
+                const rtcDot = document.getElementById('rtcBadgeDot');
+                const rtcText = document.getElementById('rtcBadgeText');
+                if (rtcDot) rtcDot.className = 'w-1.5 h-1.5 rounded-full bg-primary animate-pulse';
+                if (rtcText) rtcText.textContent = 'LIVE (RTC)';
+                logReasoning('system', `WebRTC camera stream connected (${feed})`, 'info');
+            };
+
+            pc.onconnectionstatechange = () => {
+                if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
+                    rtcConnected = false;
+                    const videoEl = document.getElementById('mainCameraVideo');
+                    const canvasEl = document.getElementById('mainCameraCanvas');
+                    videoEl.classList.add('hidden');
+                    canvasEl.classList.remove('hidden');
+                    const rtcDot = document.getElementById('rtcBadgeDot');
+                    const rtcText = document.getElementById('rtcBadgeText');
+                    if (rtcDot) rtcDot.className = 'w-1.5 h-1.5 rounded-full bg-tertiary-container';
+                    if (rtcText) rtcText.textContent = 'LIVE (WS)';
+                }
+            };
+
+            pc.addTransceiver('video', { direction: 'recvonly' });
+
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+
+            await new Promise((resolve) => {
+                if (pc.iceGatheringState === 'complete') {
+                    resolve();
+                } else {
+                    const checkState = () => {
+                        if (pc.iceGatheringState === 'complete') {
+                            pc.removeEventListener('icegatheringstatechange', checkState);
+                            resolve();
+                        }
+                    };
+                    pc.addEventListener('icegatheringstatechange', checkState);
+                    setTimeout(resolve, 800);
+                }
+            });
+
+            const host = location.hostname || 'localhost';
+            let signalingUrl = '/offer';
+            if (location.protocol === 'file:' || location.port === '3000' || location.port === '5173') {
+                signalingUrl = `http://${host}:8082/offer`;
+            }
+
+            const resp = await fetch(signalingUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    sdp: pc.localDescription.sdp,
+                    type: pc.localDescription.type,
+                    feed: feed
+                })
+            });
+
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const answer = await resp.json();
+            await pc.setRemoteDescription(new RTCSessionDescription(answer));
+        } catch (err) {
+            rtcConnected = false;
+            const videoEl = document.getElementById('mainCameraVideo');
+            const canvasEl = document.getElementById('mainCameraCanvas');
+            if (videoEl) videoEl.classList.add('hidden');
+            if (canvasEl) canvasEl.classList.remove('hidden');
+            const rtcDot = document.getElementById('rtcBadgeDot');
+            const rtcText = document.getElementById('rtcBadgeText');
+            if (rtcDot) rtcDot.className = 'w-1.5 h-1.5 rounded-full bg-white animate-pulse';
+            if (rtcText) rtcText.textContent = 'LIVE (WS)';
+        }
     }
-    mapCtx.stroke();
-  }
 
-  // detections
-  for (var j = 0; j < lastDets.length; j++) {
-    var d = lastDets[j];
-    if (d.z == null) continue;
-    var dx = (d.x != null ? d.x : 0), dz = (d.z != null ? d.z : 0);
-    var wx2 = odomX + dz * Math.cos(odomYaw) - dx * Math.sin(odomYaw);
-    var wy2 = odomY + dz * Math.sin(odomYaw) + dx * Math.cos(odomYaw);
-    var dp = w2c(wx2, wy2);
-    if (dp[0] < 0 || dp[1] < 0 || dp[0] > w || dp[1] > h) continue;
-    mapCtx.fillStyle = '#ffab00';
-    mapCtx.beginPath(); mapCtx.arc(dp[0], dp[1], 3, 0, Math.PI * 2); mapCtx.fill();
-  }
-
-  // waypoints (blue, with label + coords)
-  for (var i = 0; i < lastWaypoints.length; i++) {
-    var wp = lastWaypoints[i];
-    var wc = w2c(wp.x, wp.y);
-    if (wc[0] < 0 || wc[1] < 0 || wc[0] > w || wc[1] > h) continue;
-    mapCtx.fillStyle = '#4fc3f7';
-    mapCtx.beginPath(); mapCtx.arc(wc[0], wc[1], 5, 0, Math.PI * 2); mapCtx.fill();
-    mapCtx.strokeStyle = '#fff'; mapCtx.lineWidth = 1; mapCtx.stroke();
-    mapCtx.fillStyle = '#4fc3f7';
-    mapCtx.font = 'bold 10px sans-serif';
-    mapCtx.fillText((wp.class_name || '?') + ' (' + wp.x.toFixed(1) + ',' + wp.y.toFixed(1) + ')',
-                    wc[0] + 8, wc[1] - 8);
-  }
-
-  // target line (dashed red, when tracking/waypoint)
-  if (lastWaypoints.length > 0 && selectedRowIdx >= 0 &&
-      selectedRowIdx < lastWaypoints.length) {
-    var twp = w2c(lastWaypoints[selectedRowIdx].x, lastWaypoints[selectedRowIdx].y);
-    var rp = w2c(odomX, odomY);
-    mapCtx.strokeStyle = '#ff1744';
-    mapCtx.setLineDash([5, 4]); mapCtx.lineWidth = 1.5;
-    mapCtx.beginPath(); mapCtx.moveTo(rp[0], rp[1]); mapCtx.lineTo(twp[0], twp[1]); mapCtx.stroke();
-    mapCtx.setLineDash([]);
-  }
-
-  // robot (bigger triangle with outline)
-  var r = w2c(odomX, odomY);
-  var size = 11;
-  mapCtx.beginPath();
-  mapCtx.moveTo(r[0] + size * Math.cos(odomYaw), r[1] - size * Math.sin(odomYaw));
-  mapCtx.lineTo(r[0] + size * 0.5 * Math.cos(odomYaw + 2.5), r[1] - size * 0.5 * Math.sin(odomYaw + 2.5));
-  mapCtx.lineTo(r[0] + size * 0.5 * Math.cos(odomYaw - 2.5), r[1] - size * 0.5 * Math.sin(odomYaw - 2.5));
-  mapCtx.closePath();
-  mapCtx.fillStyle = '#ff1744'; mapCtx.fill();
-  mapCtx.strokeStyle = '#fff'; mapCtx.lineWidth = 1.5; mapCtx.stroke();
-
-  // scale bar (1m) bottom-right
-  var barLen = 1 * s;
-  if (barLen > 10 && barLen < w / 2) {
-    mapCtx.strokeStyle = '#fff'; mapCtx.lineWidth = 2;
-    mapCtx.beginPath();
-    mapCtx.moveTo(w - barLen - 15, h - 12);
-    mapCtx.lineTo(w - 15, h - 12);
-    mapCtx.stroke();
-    mapCtx.fillStyle = '#fff'; mapCtx.font = '10px sans-serif';
-    mapCtx.fillText('1m', w - barLen / 2 - 20, h - 18);
-  }
-
-  // north indicator (y-axis up)
-  mapCtx.fillStyle = '#78909c'; mapCtx.font = 'bold 12px sans-serif';
-  mapCtx.fillText('N ↑', 8, 18);
-}
-
-function updateMapOdom(x, y, yaw) {
-  odomTrace.push({ x: x, y: y, yaw: yaw });
-  if (odomTrace.length > MAX_TRACE) odomTrace.shift();
-  lastOdomX = x; lastOdomY = y; lastOdomYaw = yaw;
-  drawMap(x, y, yaw);
-}
-
-function clearWaypoints() {
-  if (!dashboardWs || dashboardWs.readyState !== 1) return;
-  dashboardWs.send(JSON.stringify({ type: 'clear_waypoints' }));
-}
-
-var tofVals = [document.getElementById('tofVal0'), document.getElementById('tofVal1')];
-var tofBars = [document.getElementById('tofBar0'), document.getElementById('tofBar1')];
-var tofBadge = document.getElementById('tofBadge');
-
-function renderTof(data) {
-  var ranges = data.ranges_m || [];
-  var count = data.count || 0;
-  tofBadge.textContent = count + '/' + ranges.length + ' @' + new Date().toLocaleTimeString();
-  var MAX_M = 1.2;
-  for (var i = 0; i < 2; i++) {
-    var r = (i < ranges.length) ? ranges[i] : null;
-    if (r === null || r === undefined) {
-      tofVals[i].textContent = '-- m';
-      tofVals[i].style.color = '#546e7a';
-      tofBars[i].style.width = '0%';
-      tofBars[i].style.background = '#546e7a';
-    } else {
-      var pct = Math.min(100, (r / MAX_M) * 100);
-      var color = r < 0.2 ? '#ff1744' : r < 0.5 ? '#ffab00' : '#00e676';
-      tofVals[i].textContent = r.toFixed(2) + ' m';
-      tofVals[i].style.color = color;
-      tofBars[i].style.width = pct + '%';
-      tofBars[i].style.background = color;
+    function connectWS() {
+        ws = new WebSocket(wsUrl);
+        ws.onopen = () => {
+            wsDot.className = 'w-2 h-2 rounded-full bg-primary animate-pulse';
+            wsStatus.textContent = 'WS: CONNECTED';
+            wsStatus.className = 'font-mono-data text-mono-data text-primary';
+            logReasoning('system', 'WebSocket connection established', 'info');
+        };
+        ws.onclose = () => {
+            wsDot.className = 'w-2 h-2 rounded-full bg-error';
+            wsStatus.textContent = 'WS: DISCONNECTED';
+            wsStatus.className = 'font-mono-data text-mono-data text-error';
+            setTimeout(connectWS, 3000);
+        };
+        ws.onmessage = (event) => {
+            const lines = event.data.split('\n');
+            for (let line of lines) {
+                if (!line) continue;
+                try {
+                    const msg = JSON.parse(line);
+                    handleMessage(msg);
+                } catch(e) {}
+            }
+        };
     }
-  }
-}
 
-function drawFrame(canvasEl, ctx, img, b64) {
-  img.onload = function() {
-    var cw = canvasEl.width;
-    var ch = canvasEl.height;
-    var scale = Math.min(cw / img.width, ch / img.height);
-    var dw = img.width * scale;
-    var dh = img.height * scale;
-    ctx.fillStyle = '#0d1b2a';
-    ctx.fillRect(0, 0, cw, ch);
-    ctx.drawImage(img, (cw - dw) / 2, (ch - dh) / 2, dw, dh);
-  };
-  img.src = 'data:image/jpeg;base64,' + b64;
-}
-
-function renderDetections(data) {
-  var dets = Array.isArray(data) ? data : (data && data.detections) || [];
-  lastDets = dets;
-  var stamp = new Date().toLocaleTimeString();
-  detCount.textContent = dets.length;
-  if (dets.length === 0) {
-    selectedRowIdx = -1;
-    detBody.innerHTML =
-      '<tr><td colspan="4" class="det-empty">No objects detected</td></tr>';
-    return;
-  }
-  var html = '';
-  for (var k = 0; k < dets.length; k++) {
-    var d = dets[k];
-    var cls = d.class_name !== undefined ? d.class_name : d.class;
-    var bbox = d.bbox || d.box || [];
-    var conf = (typeof d.confidence === 'number') ?
-      d.confidence.toFixed(2) : d.confidence;
-    var dist = (typeof d.distance === 'number') ?
-      ' ' + d.distance.toFixed(2) + 'm' : '';
-    var sel = (k === selectedRowIdx) ? ' selected' : '';
-    html += '<tr class="det-row' + sel + '" onclick="selectGotoTarget(' + k +
-      ')"><td>' + stamp + '</td><td>' + cls + dist + '</td><td>' + conf +
-      '</td><td>[' + bbox.join(', ') + ']</td></tr>';
-  }
-  detBody.innerHTML = html;
-}
-
-var wsDot = document.getElementById('wsDot');
-var wsLabel = document.getElementById('wsLabel');
-var zoneBars = document.getElementById('zoneBars');
-var turningText = document.getElementById('turningText');
-var turningArrow = document.getElementById('turningIndicator').querySelector('.turning-arrow');
-
-var BAR_MAX_HEIGHT = 60;
-
-function setWsConnected(connected) {
-  wsDot.className = 'ws-dot ' + (connected ? 'on' : 'off');
-  wsLabel.textContent = connected ? 'Dashboard WS connected' : 'Dashboard WS disconnected';
-}
-
-function connectDashboardWs() {
-  if (dashboardWs) { dashboardWs.close(); }
-  dashboardWs = new WebSocket(wsAddress);
-
-  dashboardWs.onopen = function() {
-    setWsConnected(true);
-  };
-
-  dashboardWs.onclose = function() {
-    setWsConnected(false);
-    setTimeout(connectDashboardWs, 3000);
-  };
-
-  dashboardWs.onerror = function() {
-    setWsConnected(false);
-  };
-
-  dashboardWs.onmessage = function(evt) {
-    var lines = evt.data.split('\n');
-    for (var i = 0; i < lines.length; i++) {
-      var line = lines[i];
-      if (!line) continue;
-      try {
-        var msg = JSON.parse(line);
-        handleWsMessage(msg);
-      } catch(e) {}
+    function handleMessage(msg) {
+        if (!rtcConnected && (msg.type === feedType || (feedType === 'detection_image' && msg.type === 'camera'))) {
+            renderImage(mainCameraCanvas, mainCameraCtx, mainCamImg, msg.data);
+        } else if (msg.type === 'detections') {
+            latestDetections = Array.isArray(msg.data) ? msg.data : [];
+            drawDetections();
+        } else if (msg.type === 'odom') {
+            lastOdom = msg.data;
+            document.getElementById('posXVal').textContent = msg.data.x.toFixed(2);
+            document.getElementById('posYVal').textContent = msg.data.y.toFixed(2);
+            document.getElementById('yawVal').textContent = (msg.data.yaw * 180 / Math.PI).toFixed(1) + '°';
+            drawNavMap();
+        } else if (msg.type === 'mode') {
+            document.getElementById('modeVal').textContent = msg.data.mode === 1 ? 'CMD' : 'RC';
+        } else if (msg.type === 'goto_status') {
+            document.getElementById('currentTaskLabel').textContent = `GOTO: ${msg.data.status || 'IDLE'}`;
+        } else if (msg.type === 'plant_scan_status') {
+            document.getElementById('currentTaskLabel').textContent = `SCAN: ${msg.data.status || 'IDLE'}`;
+        } else if (msg.type === 'vla_status') {
+            const vlaEl = document.getElementById('vlaSubStatus');
+            if (vlaEl) vlaEl.textContent = msg.data || 'ONLINE';
+        } else if (msg.type === 'arm_status') {
+            document.getElementById('armStatusLabel').textContent = msg.data || 'READY';
+        } else if (msg.type === 'arm_joints') {
+            if (Array.isArray(msg.data) && msg.data.length >= 4) {
+                const s1 = document.getElementById('j1Slider');
+                const s2 = document.getElementById('j2Slider');
+                const s3 = document.getElementById('j3Slider');
+                const s4 = document.getElementById('j4Slider');
+                if (s1 && !s1.matches(':active')) { s1.value = msg.data[0]; document.getElementById('j1Val').textContent = msg.data[0].toFixed(1) + '°'; }
+                if (s2 && !s2.matches(':active')) { s2.value = msg.data[1]; document.getElementById('j2Val').textContent = msg.data[1].toFixed(1) + '°'; }
+                if (s3 && !s3.matches(':active')) { s3.value = msg.data[2]; document.getElementById('j3Val').textContent = msg.data[2].toFixed(1) + '°'; }
+                if (s4 && !s4.matches(':active')) { s4.value = msg.data[3]; document.getElementById('j4Val').textContent = msg.data[3].toFixed(1) + '°'; }
+            }
+        } else if (msg.type === 'actual_path') {
+            actualPath = msg.data || [];
+            drawNavMap();
+        } else if (msg.type === 'map') {
+            lastMap = msg.data;
+            mapImg.src = 'data:image/png;base64,' + msg.data.image;
+            mapImg.onload = () => drawNavMap();
+        } else if (msg.type === 'tof') {
+            updateTofUI(msg.data);
+        } else if (msg.type === 'activity') {
+            if (Array.isArray(msg.data)) {
+                msg.data.forEach(e => logReasoning(e.source, e.msg, e.level));
+            }
+        }
     }
-  };
-}
 
-function handleWsMessage(msg) {
-  switch (msg.type) {
-    case 'camera':
-      drawFrame(cameraCanvas, cameraCtx, camImage, msg.data);
-      break;
+    function drawDetections() {
+        if (feedType === 'arm_camera') {
+            bboxOverlayCtx.clearRect(0, 0, bboxOverlayCanvas.width, bboxOverlayCanvas.height);
+            return;
+        }
+        const videoActive = !mainCameraVideo.classList.contains('hidden');
+        const w = videoActive ? mainCameraVideo.videoWidth : mainCameraCanvas.width;
+        const h = videoActive ? mainCameraVideo.videoHeight : mainCameraCanvas.height;
+        if (!w || !h) return;
+        if (bboxOverlayCanvas.width !== w || bboxOverlayCanvas.height !== h) {
+            bboxOverlayCanvas.width = w;
+            bboxOverlayCanvas.height = h;
+        }
+        bboxOverlayCtx.clearRect(0, 0, w, h);
+        const lineWidth = Math.max(2, w / 400);
+        const fontSize = Math.max(14, Math.round(w / 60));
+        bboxOverlayCtx.font = fontSize + 'px sans-serif';
+        bboxOverlayCtx.textBaseline = 'bottom';
+        latestDetections.forEach(det => {
+            if (!det.bbox || det.bbox.length < 4) return;
+            const [x1, y1, x2, y2] = det.bbox;
+            const label = `${det.class_name} ${Math.round((det.confidence || 0) * 100)}%` +
+                (det.distance != null ? ` ${det.distance.toFixed(2)}m` : '');
+            bboxOverlayCtx.strokeStyle = '#00ff9d';
+            bboxOverlayCtx.lineWidth = lineWidth;
+            bboxOverlayCtx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+            const textW = bboxOverlayCtx.measureText(label).width;
+            bboxOverlayCtx.fillStyle = '#00ff9d';
+            bboxOverlayCtx.fillRect(x1, Math.max(0, y1 - fontSize - 4), textW + 8, fontSize + 4);
+            bboxOverlayCtx.fillStyle = '#00160d';
+            bboxOverlayCtx.fillText(label, x1 + 4, Math.max(fontSize, y1));
+        });
+    }
 
-    case 'detection_image':
-      drawFrame(detectionCanvas, detectionCtx, detImage, msg.data);
-      break;
+    function updateTofUI(data) {
+        const ranges = data.ranges_m || [];
+        let left = ranges[0];
+        let right = ranges[1];
+        if (left === null || left === undefined) left = 0.85;
+        if (right === null || right === undefined) right = 0.92;
+        const maxDist = 2.0;
 
-    case 'detections':
-      renderDetections(msg.data);
-      try { drawMap(lastOdomX, lastOdomY, lastOdomYaw); } catch(e) {}
-      break;
+        const leftValEl = document.getElementById('tofLeftVal');
+        const leftBarEl = document.getElementById('tofLeftBar');
+        const rightValEl = document.getElementById('tofRightVal');
+        const rightBarEl = document.getElementById('tofRightBar');
+        const tofBadgeEl = document.getElementById('tofBadgeState');
+        const tofBadgeDotEl = document.getElementById('tofBadgeDot');
 
-    case 'goto_status':
-      updateGotoStatus(msg.data);
-      break;
+        const isOnline = data.count > 0 || (data.status && data.status !== 'offline');
 
-    case 'waypoints':
-      try { renderWaypoints(msg.data); } catch(e) {
-        wpBody.innerHTML = '<tr><td colspan="3" class="wp-empty">JS error: ' + e.message + '</td></tr>';
-      }
-      try { drawMap(lastOdomX, lastOdomY, lastOdomYaw); } catch(e) {}
-      break;
+        if (tofBadgeEl) {
+            tofBadgeEl.textContent = isOnline ? 'ONLINE' : 'OFFLINE';
+            tofBadgeEl.className = `font-mono-data text-[10px] ${isOnline ? 'text-primary' : 'text-error'}`;
+        }
+        if (tofBadgeDotEl) {
+            tofBadgeDotEl.className = `w-2 h-2 rounded-full ${isOnline ? 'bg-primary' : 'bg-error'}`;
+        }
 
-    case 'tof':
-      renderTof(msg.data);
-      break;
+        if (leftValEl && leftBarEl) {
+            const mm = Math.round(left * 1000);
+            leftValEl.textContent = `${left.toFixed(3)}m (${mm}mm)`;
+            const pct = Math.min(100, Math.max(5, (left / maxDist) * 100));
+            leftBarEl.style.width = `${pct}%`;
+            leftBarEl.className = `h-full rounded transition-all duration-300 ${left < 0.4 ? 'bg-error shadow-[0_0_8px_#ffb4ab]' : left < 0.8 ? 'bg-tertiary-container' : 'bg-primary shadow-[0_0_8px_#4be277]'}`;
+        }
 
-    case 'odom':
-      document.getElementById('posX').textContent = msg.data.x.toFixed(2);
-      document.getElementById('posY').textContent = msg.data.y.toFixed(2);
-      document.getElementById('posYaw').textContent = msg.data.yaw.toFixed(2);
-      document.getElementById('velLinear').textContent = msg.data.linear.toFixed(2);
-      document.getElementById('velAngular').textContent = msg.data.angular.toFixed(2);
-      updateMapOdom(msg.data.x, msg.data.y, msg.data.yaw);
-      break;
+        if (rightValEl && rightBarEl) {
+            const mm = Math.round(right * 1000);
+            rightValEl.textContent = `${right.toFixed(3)}m (${mm}mm)`;
+            const pct = Math.min(100, Math.max(5, (right / maxDist) * 100));
+            rightBarEl.style.width = `${pct}%`;
+            rightBarEl.className = `h-full rounded transition-all duration-300 ${right < 0.4 ? 'bg-error shadow-[0_0_8px_#ffb4ab]' : right < 0.8 ? 'bg-tertiary-container' : 'bg-primary shadow-[0_0_8px_#4be277]'}`;
+        }
+    }
 
-    case 'mode':
-      var badge = document.getElementById('modeBadge');
-      if (msg.data.mode === 1) {
-        badge.textContent = 'CMD';
-        badge.className = 'badge cmd';
-      } else {
-        badge.textContent = 'RC';
-        badge.className = 'badge rc';
-      }
-      break;
+    function renderImage(canvas, ctx, img, b64) {
+        img.onload = () => {
+            canvas.width = img.width;
+            canvas.height = img.height;
+            ctx.drawImage(img, 0, 0);
+        };
+        img.src = 'data:image/jpeg;base64,' + b64;
+    }
 
-    case 'obstacles':
-      var zones = msg.data.zones;
-      var cmd = msg.data.turning;
-      var safe = msg.data.safe_distance || 0.8;
-      var warn = msg.data.warn_distance || 1.2;
+    function switchFeed() {
+        if (feedType === 'detection_image') {
+            feedType = 'camera';
+            startWebRTC('color');
+        } else if (feedType === 'camera') {
+            feedType = 'arm_camera';
+            startWebRTC('arm');
+        } else {
+            feedType = 'detection_image';
+            startWebRTC('detection');
+        }
+        
+        const feedLabel = feedType === 'detection_image' ? 'Depth Camera (YOLO)' : 
+                          feedType === 'camera' ? 'Depth Camera' : 
+                          'Arm Camera';
+        const feedTag = document.getElementById('feedLabelTag');
+        if (feedTag) feedTag.textContent = `LIVE_FEED: ${feedLabel}`;
+        logReasoning('system', `Feed switched to: ${feedLabel}`, 'info');
+    }
 
-      var bars = zoneBars.children;
-      for (var j = 0; j < bars.length; j++) {
-        var bar = bars[j];
-        var d = j < zones.length ? zones[j] : 99.0;
-        var h = Math.max(8, Math.min(BAR_MAX_HEIGHT, (d / 3.0) * BAR_MAX_HEIGHT));
-        var color;
-        if (d < safe) { color = '#ff1744'; }
-        else if (d < warn) { color = '#ffab00'; }
-        else { color = '#00e676'; }
-        bar.style.height = h + 'px';
-        bar.style.background = color;
-        bar.querySelector('.zone-bar-label').textContent =
-          (d < 10 ? d.toFixed(1) : '---') + 'm';
-      }
+    function logReasoning(source, msg, level) {
+        const row = document.createElement('tr');
+        row.className = 'border-b border-white/5';
+        const srcLabel = SOURCE_LABELS[source] || String(source || 'system').toUpperCase();
+        const lvl = String(level || 'info').toUpperCase();
+        const lvlColor = level === 'error' ? 'text-error' : level === 'warn' ? 'text-tertiary-container' : 'text-primary';
+        row.innerHTML = `<td class="px-2 py-1 text-primary whitespace-nowrap">${srcLabel}</td>
+                         <td class="px-2 py-1 text-on-surface-variant break-words">${msg}</td>
+                         <td class="px-2 py-1 text-right ${lvlColor} whitespace-nowrap">${lvl}</td>`;
+        reasoningLog.appendChild(row);
+        while (reasoningLog.children.length > 40) {
+            reasoningLog.removeChild(reasoningLog.firstChild);
+        }
+        logScroll.scrollTop = logScroll.scrollHeight;
+        logCount.textContent = `${reasoningLog.children.length} ENTRIES`;
+    }
 
-      turningText.textContent = cmd;
-      turningText.className = 'turning-text ' +
-        (cmd === 'FORWARD' ? 'turning-forward' :
-         cmd === 'STOPPED' ? 'turning-stopped' : 'turning-left');
-      if (cmd === 'FORWARD') {
-        turningArrow.innerHTML = '&#x2191;';
-        turningArrow.className = 'turning-arrow turning-forward';
-      } else if (cmd === 'TURN LEFT') {
-        turningArrow.innerHTML = '&#x2190;';
-        turningArrow.className = 'turning-arrow turning-left';
-      } else if (cmd === 'TURN RIGHT') {
-        turningArrow.innerHTML = '&#x2192;';
-        turningArrow.className = 'turning-arrow turning-right';
-      } else {
-        turningArrow.innerHTML = '&#x2B1B;';
-        turningArrow.className = 'turning-arrow turning-stopped';
-      }
-      break;
-  }
-}
+    function switchTab(tab) {
+        const isLog = tab === 'log';
+        document.getElementById('scanTab').classList.toggle('hidden', isLog);
+        document.getElementById('logTab').classList.toggle('hidden', !isLog);
 
-connectDashboardWs();
-</script>
+        const scanBtn = document.getElementById('tabScanBtn');
+        const logBtn = document.getElementById('tabLogBtn');
+        scanBtn.className = `flex-1 py-2 px-3 font-label-caps text-label-caps tracking-widest border transition-colors rounded flex items-center justify-center gap-2 ${isLog ? 'border-outline-variant text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high' : 'bg-primary/20 text-primary border-primary'}`;
+        logBtn.className = `flex-1 py-2 px-3 font-label-caps text-label-caps tracking-widest border transition-colors rounded flex items-center justify-center gap-2 ${isLog ? 'bg-primary/20 text-primary border-primary' : 'border-outline-variant text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high'}`;
+    }
 
-<script>
-var ROS_URL = 'ws://' + location.hostname + ':9090';
-var ros = new ROSLIB.Ros({ url: ROS_URL });
+    function sendVlaPrompt() {
+        const input = document.getElementById('vlaInput');
+        const prompt = input.value.trim();
+        if (prompt) {
+            sendControl({ type: 'vla_prompt', prompt: prompt });
+            logReasoning('vla', `VLA Prompt sent: "${prompt}"`, 'info');
+            input.value = '';
+        }
+    }
 
-ros.on('connection', function() {
-  document.getElementById('statusDot').className = 'status-dot connected';
-});
-ros.on('close', function() {
-  document.getElementById('statusDot').className = 'status-dot disconnected';
-});
-ros.on('error', function() {
-  document.getElementById('statusDot').className = 'status-dot disconnected';
-});
+    function sendArmJoints() {
+        const j1 = parseFloat(document.getElementById('j1Slider').value);
+        const j2 = parseFloat(document.getElementById('j2Slider').value);
+        const j3 = parseFloat(document.getElementById('j3Slider').value);
+        const j4 = parseFloat(document.getElementById('j4Slider').value);
+        
+        document.getElementById('j1Val').textContent = j1.toFixed(1) + '°';
+        document.getElementById('j2Val').textContent = j2.toFixed(1) + '°';
+        document.getElementById('j3Val').textContent = j3.toFixed(1) + '°';
+        document.getElementById('j4Val').textContent = j4.toFixed(1) + '°';
 
-var cmdVelPub = new ROSLIB.Topic({
-  ros: ros, name: '/cmd_vel', messageType: 'geometry_msgs/Twist'
-});
+        sendControl({ type: 'arm_joints', angles: [j1, j2, j3, j4] });
+    }
 
-var canvas = document.getElementById('joystickCanvas');
-var ctx = canvas.getContext('2d');
-var dragging = false;
-var joyX = 0, joyY = 0;
-var centerX = 100, centerY = 100, radius = 80;
+    function sendArmPoseGoal() {
+        const x = parseFloat(document.getElementById('armGoalX').value);
+        const y = parseFloat(document.getElementById('armGoalY').value);
+        const z = parseFloat(document.getElementById('armGoalZ').value);
+        sendControl({ type: 'arm_pose_goal', x: x, y: y, z: z });
+        logReasoning('arm', `Arm Pose Goal sent: (${x}, ${y}, ${z})`, 'info');
+    }
 
-function drawJoystick() {
-  ctx.clearRect(0, 0, 200, 200);
-  ctx.beginPath();
-  ctx.arc(centerX, centerY, radius, 0, Math.PI*2);
-  ctx.fillStyle = '#0d1b2a';
-  ctx.fill();
-  ctx.strokeStyle = '#ffffff22';
-  ctx.lineWidth = 2;
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.arc(centerX + joyX * radius, centerY + joyY * radius, 20, 0, Math.PI*2);
-  ctx.fillStyle = dragging ? '#66bbff' : '#4488cc';
-  ctx.fill();
-}
+    function emergencyStop() {
+        sendControl({ type: 'emergency_stop' });
+        logReasoning('system', 'EMERGENCY STOP COMMAND SENT', 'error');
+    }
 
-function getPos(e) {
-  var rect = canvas.getBoundingClientRect();
-  var scaleX = canvas.width / rect.width;
-  var scaleY = canvas.height / rect.height;
-  var cx = (e.clientX || (e.touches && e.touches[0].clientX)) - rect.left;
-  var cy = (e.clientY || (e.touches && e.touches[0].clientY)) - rect.top;
-  return { x: (cx * scaleX - centerX) / radius, y: (cy * scaleY - centerY) / radius };
-}
+    function drawNavMap() {
+        const w = navMapCanvas.width = navMapCanvas.clientWidth || 300;
+        const h = navMapCanvas.height = navMapCanvas.clientHeight || 200;
+        navMapCtx.fillStyle = '#131318';
+        navMapCtx.fillRect(0, 0, w, h);
 
-function publishCmd() {
-  var maxSpeed = parseFloat(document.getElementById('speedSlider').value);
-  cmdVelPub.publish({
-    linear: { x: -joyY * maxSpeed, y: 0, z: 0 },
-    angular: { x: 0, y: 0, z: joyX * maxSpeed }
-  });
-}
+        if (lastMap && mapImg.complete) {
+            navMapCtx.drawImage(mapImg, 0, 0, w, h);
+        }
 
-var cmdInterval = null;
+        const cx = w / 2;
+        const cy = h / 2;
+        const scale = 20;
 
-canvas.addEventListener('mousedown', function(e) {
-  dragging = true;
-  var p = getPos(e);
-  joyX = Math.max(-1, Math.min(1, p.x));
-  joyY = Math.max(-1, Math.min(1, p.y));
-  drawJoystick();
-  publishCmd();
-  cmdInterval = setInterval(publishCmd, 100);
-});
+        if (actualPath.length > 1) {
+            navMapCtx.strokeStyle = '#4be277';
+            navMapCtx.lineWidth = 2;
+            navMapCtx.beginPath();
+            actualPath.forEach((pt, i) => {
+                const px = cx + (pt.x - lastOdom.x) * scale;
+                const py = cy - (pt.y - lastOdom.y) * scale;
+                if (i === 0) navMapCtx.moveTo(px, py);
+                else navMapCtx.lineTo(px, py);
+            });
+            navMapCtx.stroke();
+        }
 
-window.addEventListener('mousemove', function(e) {
-  if (!dragging) return;
-  var p = getPos(e);
-  joyX = Math.max(-1, Math.min(1, p.x));
-  joyY = Math.max(-1, Math.min(1, p.y));
-  drawJoystick();
-});
+        navMapCtx.fillStyle = '#4be277';
+        navMapCtx.beginPath();
+        navMapCtx.arc(cx, cy, 6, 0, Math.PI * 2);
+        navMapCtx.fill();
+    }
 
-window.addEventListener('mouseup', function() {
-  if (!dragging) return;
-  dragging = false;
-  joyX = 0; joyY = 0;
-  drawJoystick();
-  clearInterval(cmdInterval);
-  cmdVelPub.publish({ linear: { x: 0, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 } });
-});
+    let scene, camera, renderer, pointsMesh;
+    function initThreeJS() {
+        const container = document.getElementById('threejsContainer');
+        if (!container) return;
+        const w = container.clientWidth || 300;
+        const h = container.clientHeight || 200;
 
-canvas.addEventListener('touchstart', function(e) {
-  e.preventDefault();
-  dragging = true;
-  var p = getPos(e);
-  joyX = Math.max(-1, Math.min(1, p.x));
-  joyY = Math.max(-1, Math.min(1, p.y));
-  drawJoystick();
-  publishCmd();
-  cmdInterval = setInterval(publishCmd, 100);
-});
+        scene = new THREE.Scene();
+        camera = new THREE.PerspectiveCamera(60, w / h, 0.1, 100);
+        camera.position.set(0, -3, 3);
+        camera.lookAt(0, 0, 0);
 
-canvas.addEventListener('touchmove', function(e) {
-  e.preventDefault();
-  if (!dragging) return;
-  var p = getPos(e);
-  joyX = Math.max(-1, Math.min(1, p.x));
-  joyY = Math.max(-1, Math.min(1, p.y));
-  drawJoystick();
-});
+        renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(w, h);
+        container.appendChild(renderer.domElement);
 
-canvas.addEventListener('touchend', function(e) {
-  e.preventDefault();
-  dragging = false;
-  joyX = 0; joyY = 0;
-  drawJoystick();
-  clearInterval(cmdInterval);
-  cmdVelPub.publish({ linear: { x: 0, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 } });
-});
+        const grid = new THREE.GridHelper(10, 10, 0x4be277, 0x3d4a3d);
+        grid.rotation.x = Math.PI / 2;
+        scene.add(grid);
 
-document.getElementById('emergencyBtn').addEventListener('click', function() {
-  cmdVelPub.publish({ linear: { x: 0, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 } });
-});
+        const count = 2000;
+        const geometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(count * 3);
+        const colors = new Float32Array(count * 3);
 
-document.getElementById('speedSlider').addEventListener('input', function(e) {
-  document.getElementById('speedLabel').textContent = parseFloat(e.target.value).toFixed(2);
-});
+        for (let i = 0; i < count; i++) {
+            positions[i * 3] = (Math.random() - 0.5) * 4;
+            positions[i * 3 + 1] = (Math.random() - 0.5) * 4;
+            positions[i * 3 + 2] = Math.random() * 1.5;
 
-drawJoystick();
+            colors[i * 3] = 0.29;
+            colors[i * 3 + 1] = 0.88;
+            colors[i * 3 + 2] = 0.46;
+        }
+
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+        const material = new THREE.PointsMaterial({ size: 0.03, vertexColors: true });
+        pointsMesh = new THREE.Points(geometry, material);
+        scene.add(pointsMesh);
+
+        function animate() {
+            requestAnimationFrame(animate);
+            if (pointsMesh) pointsMesh.rotation.z += 0.002;
+            renderer.render(scene, camera);
+        }
+        animate();
+    }
+
+    function initJoystick() {
+        const zone = document.getElementById('joystickZone');
+        const knob = document.getElementById('joystickKnob');
+        let active = false;
+
+        const handleMove = (clientX, clientY) => {
+            const rect = zone.getBoundingClientRect();
+            const cx = rect.left + rect.width / 2;
+            const cy = rect.top + rect.height / 2;
+            let dx = clientX - cx;
+            let dy = clientY - cy;
+            const maxDist = rect.width / 2 - 15;
+            const dist = Math.hypot(dx, dy);
+
+            if (dist > maxDist) {
+                dx = (dx / dist) * maxDist;
+                dy = (dy / dist) * maxDist;
+            }
+
+            knob.style.transform = `translate(${dx}px, ${dy}px)`;
+
+            const speedLimit = parseFloat(document.getElementById('speedSlider').value);
+            const linear = (-dy / maxDist) * speedLimit;
+            const angular = (-dx / maxDist) * 1.5;
+
+            sendControl({ type: 'cmd_vel', linear: linear, angular: angular });
+        };
+
+        zone.addEventListener('mousedown', () => active = true);
+        window.addEventListener('mouseup', () => {
+            if (active) {
+                active = false;
+                knob.style.transform = 'translate(0px, 0px)';
+                sendControl({ type: 'cmd_vel', linear: 0, angular: 0 });
+            }
+        });
+        window.addEventListener('mousemove', (e) => {
+            if (active) handleMove(e.clientX, e.clientY);
+        });
+    }
+
+    window.onload = () => {
+        connectWS();
+        startWebRTC(feedType === 'detection_image' ? 'detection' : 'color');
+        initThreeJS();
+        initJoystick();
+        logReasoning('system', 'Connected to Bio-Robotic Core.', 'info');
+    };
 </script>
 </body>
 </html>

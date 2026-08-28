@@ -1,6 +1,7 @@
 amcl:
   ros__parameters:
     use_sim_time: False
+    scan_topic: /scan_filtered
     alpha1: 0.2
     alpha2: 0.2
     alpha3: 0.2
@@ -97,26 +98,32 @@ controller_server:
     general_goal_checker:
       stateful: True
       plugin: nav2_controller::SimpleGoalChecker
-      xy_goal_tolerance: 0.15
-      yaw_goal_tolerance: 0.25
+      # xy_goal_tolerance deliberately left unchanged — see nav2_params.yaml
+      # for the rationale (fixed arm-relative scan offset is the real
+      # precision bottleneck, not Nav2).
+      xy_goal_tolerance: 0.08
+      yaw_goal_tolerance: 0.08
     FollowPath:
       plugin: nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController
-      desired_linear_vel: 0.2
-      max_linear_accel: 0.3
-      max_linear_decel: 0.3
+      # Tuned down for the plant-scan mission — see nav2_params.yaml for
+      # the mapped-stack rationale; deltas here are smaller since this
+      # mapless variant was already tuned more conservatively.
+      desired_linear_vel: 0.18
+      max_linear_accel: 0.25
+      max_linear_decel: 0.4
       lookahead_dist: 0.4
       min_lookahead_dist: 0.3
       max_lookahead_dist: 0.6
       rotate_to_heading_angular_vel: 0.4
       transform_tolerance: 0.2
       use_velocity_scaled_lookahead_dist: false
-      min_approach_linear_velocity: 0.05
+      min_approach_linear_velocity: 0.03
       approach_velocity_scale: 1.0
       use_cost_regulated_linear_velocity_scaling: true
       cost_scaling_dist: 0.3
       cost_scaling_gain: 5.0
       regulated_linear_scaling_min_velocity: 0.05
-      regulated_linear_scaling_max_velocity: 0.2
+      regulated_linear_scaling_max_velocity: 0.18
       use_fixed_curvature_lookahead: false
       curvature_lookahead_dist: 0.3
 
@@ -126,6 +133,7 @@ local_costmap:
       use_sim_time: False
       global_frame: odom
       robot_base_frame: base_footprint
+      transform_tolerance: 0.5
       rolling_window: true
       width: 3
       height: 3
@@ -141,7 +149,7 @@ local_costmap:
         raytrace_range: 3.5
         observation_sources: scan ground_obstacles yolo_obstacles
         scan:
-          topic: /scan
+          topic: /scan_filtered
           max_obstacle_height: 1.0
           clearing: True
           marking: True
@@ -151,7 +159,7 @@ local_costmap:
           inf_is_valid: false
         ground_obstacles:
           topic: /ground_obstacle_points
-          sensor_frame: camera_depth_optical_frame
+          sensor_frame: base_footprint
           data_type: PointCloud2
           min_obstacle_height: 0.0
           max_obstacle_height: 0.50
@@ -180,6 +188,7 @@ global_costmap:
       use_sim_time: False
       global_frame: odom
       robot_base_frame: base_footprint
+      transform_tolerance: 0.5
       rolling_window: true
       width: 20
       height: 20
@@ -195,7 +204,7 @@ global_costmap:
         raytrace_range: 3.5
         observation_sources: scan ground_obstacles yolo_obstacles
         scan:
-          topic: /scan
+          topic: /scan_filtered
           max_obstacle_height: 1.0
           min_obstacle_height: 0.05
           clearing: True
@@ -205,7 +214,7 @@ global_costmap:
           inf_is_valid: false
         ground_obstacles:
           topic: /ground_obstacle_points
-          sensor_frame: camera_depth_optical_frame
+          sensor_frame: base_footprint
           data_type: PointCloud2
           min_obstacle_height: 0.0
           max_obstacle_height: 0.50

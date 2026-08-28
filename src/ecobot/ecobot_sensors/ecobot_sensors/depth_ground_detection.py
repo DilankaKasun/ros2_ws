@@ -1,3 +1,4 @@
+import socket
 import threading
 import time
 import rclpy
@@ -11,6 +12,15 @@ import numpy as np
 import struct
 import math
 from http.server import HTTPServer, BaseHTTPRequestHandler
+
+
+class ReusableHTTPServer(HTTPServer):
+    allow_reuse_address = True
+
+    def server_bind(self):
+        if hasattr(socket, 'SO_REUSEPORT'):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        super().server_bind()
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 
@@ -67,7 +77,7 @@ class DepthGroundDetection(Node):
         self.declare_parameter('camera_frame', 'camera_depth_optical_frame')
         self.declare_parameter('depth_topic', '/camera/depth/image_raw')
         self.declare_parameter('camera_info_topic', '/camera/depth/camera_info')
-        self.declare_parameter('mjpeg_port', 8084)
+        self.declare_parameter('mjpeg_port', 8086)
         self.declare_parameter('depth_scale', 0.001)
 
         self.camera_height = self.get_parameter('camera_height').value
@@ -96,7 +106,7 @@ class DepthGroundDetection(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
         GroundMJPEGHandler.frame = None
-        self.mjpeg_server = HTTPServer(('', mjpeg_port), GroundMJPEGHandler)
+        self.mjpeg_server = ReusableHTTPServer(('', mjpeg_port), GroundMJPEGHandler)
         self.mjpeg_thread = threading.Thread(
             target=self.mjpeg_server.serve_forever, daemon=True)
         self.mjpeg_thread.start()
@@ -205,7 +215,7 @@ class DepthGroundDetection(Node):
         obstacle_pts, x_cam, y_cam, z_cam = self.project_obstacle_points(depth_image)
 
         if len(obstacle_pts) > 0:
-            self.publish_pointcloud(obstacle_pts)
+            self.publish_pointcloud(obstacle_pts, msg.header.stamp)
 
         h, w = depth_image.shape
         colored = cv2.applyColorMap(
@@ -244,11 +254,11 @@ class DepthGroundDetection(Node):
         except Exception:
             pass
 
-    def publish_pointcloud(self, points):
+    def publish_pointcloud(self, points, stamp=None):
         if len(points) == 0:
             return
         msg = PointCloud2()
-        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.stamp = stamp if stamp is not None else self.get_clock().now().to_msg()
         msg.header.frame_id = self.base_frame
         msg.height = 1
         msg.width = len(points)
@@ -266,6 +276,7 @@ class DepthGroundDetection(Node):
 
     def destroy_node(self):
         self.mjpeg_server.shutdown()
+        self.mjpeg_server.server_close()
         cv2.destroyAllWindows()
         super().destroy_node()
 

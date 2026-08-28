@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>ecobot_voice</name>
+  <version>0.1.0</version>
+  <description>Conversational AI and voice services for ecobot</description>
+  <maintainer email="user@ecobot.local">ecobot</maintainer>
+  <license>MIT</license>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav2_msgs</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>python3-cv-bridge</exec_depend>
+  <exec_depend>ecobot_arm_control</exec_depend>
+  <test_depend>python3-pytest</test_depend>
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

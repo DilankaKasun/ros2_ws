@@ -1,3 +1,4 @@
+import socket
 import threading
 import time
 import json
@@ -10,6 +11,15 @@ import cv2
 import numpy as np
 import struct
 from http.server import HTTPServer, BaseHTTPRequestHandler
+
+
+class ReusableHTTPServer(HTTPServer):
+    allow_reuse_address = True
+
+    def server_bind(self):
+        if hasattr(socket, 'SO_REUSEPORT'):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        super().server_bind()
 
 try:
     import tensorrt as trt
@@ -130,7 +140,7 @@ class YOLODetection(Node):
         self.declare_parameter('base_frame', 'base_footprint')
         self.declare_parameter('camera_frame', 'camera_depth_optical_frame')
         self.declare_parameter('use_small_obstacle_filter', True)
-        self.declare_parameter('mjpeg_port', 8085)
+        self.declare_parameter('mjpeg_port', 8087)
         self.declare_parameter('depth_scale', 0.001)
 
         model_path = self.get_parameter('model_path').value
@@ -166,7 +176,7 @@ class YOLODetection(Node):
         self.engine_loaded = False
 
         YoloMJPEGHandler.frame = None
-        self.mjpeg_server = HTTPServer(('', mjpeg_port), YoloMJPEGHandler)
+        self.mjpeg_server = ReusableHTTPServer(('', mjpeg_port), YoloMJPEGHandler)
         self.mjpeg_thread = threading.Thread(
             target=self.mjpeg_server.serve_forever, daemon=True)
         self.mjpeg_thread.start()
@@ -219,6 +229,7 @@ class YOLODetection(Node):
             cv_img = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
             with self.color_lock:
                 self.latest_color = cv_img.copy()
+                self.latest_header = msg.header
         except Exception:
             return
 
@@ -285,7 +296,7 @@ class YOLODetection(Node):
         blob = canvas.transpose(2, 0, 1)[np.newaxis, ...] / 255.0
         return blob.astype(np.float32), scale, dw, dh
 
-    def postprocess(self, output, scale, dw, dh):
+    def postprocess(self, output, scale, dw, dh, orig_w=640, orig_h=480):
         output = output.reshape((1, 84, -1)).transpose(0, 2, 1)
         dets = output[0]
         boxes, scores, class_ids = [], [], []
@@ -303,8 +314,8 @@ class YOLODetection(Node):
             h /= scale
             x1 = max(0, cx - w / 2)
             y1 = max(0, cy - h / 2)
-            x2 = min(640, cx + w / 2)
-            y2 = min(480, cy + h / 2)
+            x2 = min(orig_w, cx + w / 2)
+            y2 = min(orig_h, cy + h / 2)
             boxes.append([x1, y1, x2, y2])
             scores.append(score)
             class_ids.append(cls_id)
@@ -330,6 +341,7 @@ class YOLODetection(Node):
     def infer(self, img):
         if not self.engine_loaded:
             return []
+        h, w = img.shape[:2]
         input_img, scale, dw, dh = self.preprocess(img)
         np.copyto(self.input_host, input_img.ravel())
         cuda.memcpy_htod_async(self.input_device, self.input_host, self.stream)
@@ -337,7 +349,7 @@ class YOLODetection(Node):
         cuda.memcpy_dtoh_async(self.output_host, self.output_device, self.stream)
         self.stream.synchronize()
         output = self.output_host.copy()
-        return self.postprocess(output, scale, dw, dh)
+        return self.postprocess(output, scale, dw, dh, orig_w=w, orig_h=h)
 
     def get_depth_at(self, u, v):
         with self.depth_lock:
@@ -364,6 +376,7 @@ class YOLODetection(Node):
             if self.latest_color is None:
                 return
             img = self.latest_color.copy()
+            header = getattr(self, 'latest_header', None)
             self.latest_color = None
 
         if not self.engine_loaded:
@@ -393,7 +406,7 @@ class YOLODetection(Node):
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
         if points_3d:
-            self.publish_pointcloud(np.array(points_3d, dtype=np.float32))
+            self.publish_pointcloud(np.array(points_3d, dtype=np.float32), header.stamp if header else None)
 
         _, jpg = cv2.imencode('.jpg', overlay, [cv2.IMWRITE_JPEG_QUALITY, 70])
         with YoloMJPEGHandler.frame_lock:
@@ -407,11 +420,11 @@ class YOLODetection(Node):
 
         self.detections_pub.publish(String(data=json.dumps(results)))
 
-    def publish_pointcloud(self, points):
+    def publish_pointcloud(self, points, stamp=None):
         if len(points) == 0:
             return
         msg = PointCloud2()
-        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.stamp = stamp if stamp is not None else self.get_clock().now().to_msg()
         msg.header.frame_id = self.camera_frame
         msg.height = 1
         msg.width = len(points)
@@ -429,6 +442,7 @@ class YOLODetection(Node):
 
     def destroy_node(self):
         self.mjpeg_server.shutdown()
+        self.mjpeg_server.server_close()
         cv2.destroyAllWindows()
         super().destroy_node()
 

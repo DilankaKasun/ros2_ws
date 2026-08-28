@@ -66,11 +66,17 @@ class RealSenseFeed(Node):
                 f'color intrinsics: fx={self.color_intrinsics.fx:.2f} fy={self.color_intrinsics.fy:.2f} '
                 f'cx={self.color_intrinsics.ppx:.2f} cy={self.color_intrinsics.ppy:.2f}')
             self.timer = self.create_timer(1.0 / 30.0, self.publish_frames)
-        except RuntimeError as e:
-            self.get_logger().error(f'failed to start RealSense: {e}')
+        except Exception as e:
+            self.pipeline = None
+            self.get_logger().error(
+                f'RealSense D415 not available ({e}) — camera will report offline on '
+                f'/ecobot/hardware_status, no synthetic data will be published')
 
     def publish_frames(self):
-        if not self.running or self.pipeline is None:
+        if not self.running:
+            return
+
+        if self.pipeline is None:
             return
         try:
             frames = self.pipeline.wait_for_frames(timeout_ms=5000)
@@ -104,6 +110,7 @@ class RealSenseFeed(Node):
             info.header.frame_id = 'camera_depth_optical_frame'
             info.width = self.depth_intrinsics.width
             info.height = self.depth_intrinsics.height
+            info.distortion_model = 'plumb_bob'
             info.k = [
                 self.depth_intrinsics.fx, 0.0, self.depth_intrinsics.ppx,
                 0.0, self.depth_intrinsics.fy, self.depth_intrinsics.ppy,
@@ -140,6 +147,7 @@ class RealSenseFeed(Node):
             cinfo.header.frame_id = 'camera_color_optical_frame'
             cinfo.width = self.color_intrinsics.width
             cinfo.height = self.color_intrinsics.height
+            cinfo.distortion_model = 'plumb_bob'
             cinfo.k = [
                 self.color_intrinsics.fx, 0.0, self.color_intrinsics.ppx,
                 0.0, self.color_intrinsics.fy, self.color_intrinsics.ppy,

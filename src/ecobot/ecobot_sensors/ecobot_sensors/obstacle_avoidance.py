@@ -1,15 +1,25 @@
 import json
+import socket
 import threading
 import time
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Image
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 from cv_bridge import CvBridge
 import cv2
 import numpy as np
 from http.server import HTTPServer, BaseHTTPRequestHandler
+
+
+class ReusableHTTPServer(HTTPServer):
+    allow_reuse_address = True
+
+    def server_bind(self):
+        if hasattr(socket, 'SO_REUSEPORT'):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        super().server_bind()
 
 
 class ObstacleMJPEGHandler(BaseHTTPRequestHandler):
@@ -65,10 +75,12 @@ class ObstacleAvoidance(Node):
         self.declare_parameter('mjpeg_port', 8083)
         self.declare_parameter('depth_topic', '/camera/depth/image_raw')
         self.declare_parameter('depth_scale', 0.001)
-        self.declare_parameter('tof_threshold', 0.5)
+        self.declare_parameter('tof_threshold', 2.0)
+        self.declare_parameter('avoid_hysteresis', 0.15)
 
         self.safe_distance = self.get_parameter('safe_distance').value
         self.warn_distance = self.get_parameter('warn_distance').value
+        self.avoid_hysteresis = self.get_parameter('avoid_hysteresis').value
         self.num_zones = self.get_parameter('zones').value
         self.max_linear = self.get_parameter('max_linear_speed').value
         self.max_angular = self.get_parameter('max_angular_speed').value
@@ -88,7 +100,7 @@ class ObstacleAvoidance(Node):
         self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
 
         ObstacleMJPEGHandler.frame = None
-        self.mjpeg_server = HTTPServer(('', mjpeg_port), ObstacleMJPEGHandler)
+        self.mjpeg_server = ReusableHTTPServer(('', mjpeg_port), ObstacleMJPEGHandler)
         self.mjpeg_thread = threading.Thread(
             target=self.mjpeg_server.serve_forever, daemon=True)
         self.mjpeg_thread.start()
@@ -109,6 +121,21 @@ class ObstacleAvoidance(Node):
         self.goto_vel_timeout = 1.0
         self.last_goto_vel_time = self.get_clock().now()
 
+        # detection_goto.py publishes True while it's driving toward an
+        # auto-tracked target it deliberately wants to get close to (a
+        # plant) — otherwise this node's own depth-based avoidance sees
+        # the very thing being approached as an obstacle and swerves/
+        # reverses away from it well before the target is even reached.
+        # Same fail-safe timeout pattern as goto/nav_vel: an unrefreshed
+        # signal (node died, was never launched) reverts to normal
+        # avoidance rather than silently staying suppressed forever.
+        self.suppress_avoidance_sub = self.create_subscription(
+            Bool, '/ecobot/goto_suppress_avoidance',
+            self.suppress_avoidance_cb, 10)
+        self.suppress_avoidance = False
+        self.suppress_avoidance_timeout = 1.0
+        self.last_suppress_avoidance_time = self.get_clock().now()
+
         self.depth_sub = self.create_subscription(
             Image, depth_topic, self.depth_cb, 10)
 
@@ -119,6 +146,9 @@ class ObstacleAvoidance(Node):
         self.escape_state = 'NONE'
         self.escape_start_time = None
         self.escape_turn_dir = 'LEFT'
+        # Latched with hysteresis so a min_dist hovering right at
+        # safe_distance doesn't flip FORWARD/TURN every 100ms tick.
+        self._danger_active = False
 
         self.get_logger().info(
             f'obstacle avoidance started — depth_topic={depth_topic} '
@@ -136,6 +166,10 @@ class ObstacleAvoidance(Node):
         self.latest_goto_vel = msg
         self.has_goto_vel = True
         self.last_goto_vel_time = self.get_clock().now()
+
+    def suppress_avoidance_cb(self, msg):
+        self.suppress_avoidance = bool(msg.data)
+        self.last_suppress_avoidance_time = self.get_clock().now()
 
     def depth_cb(self, msg: Image):
         try:
@@ -180,6 +214,27 @@ class ObstacleAvoidance(Node):
             self.get_clock().now() - self.last_goto_vel_time
         ).nanoseconds / 1e9 > self.goto_vel_timeout
         goto_active = self.has_goto_vel and not goto_expired
+
+        suppress_expired = (
+            self.get_clock().now() - self.last_suppress_avoidance_time
+        ).nanoseconds / 1e9 > self.suppress_avoidance_timeout
+        # Only the goto (detection_goto auto-track) source can suppress —
+        # Nav2-driven navigation always keeps full avoidance.
+        suppress_active = (
+            self.suppress_avoidance and not suppress_expired
+            and goto_active and not nav2_active)
+
+        # detection_goto is deliberately driving toward (or parked in front
+        # of) the very thing depth sees as "blocked" — the plant it means to
+        # reach. If suppression is active, any in-flight REVERSE/TURN escape
+        # from a prior all_blocked snapshot must be aborted immediately so it
+        # doesn't keep rotating the robot away from the approach target while
+        # the approach is actively progressing.
+        if suppress_active and self.escape_state != 'NONE':
+            self.escape_state = 'NONE'
+            self.escape_start_time = None
+            self.get_logger().info(
+                'escape aborted — auto-track approach in progress')
 
         with self.depth_lock:
             depth_available = self.latest_depth is not None
@@ -234,7 +289,7 @@ class ObstacleAvoidance(Node):
         cmd = 'FORWARD'
         sr = self.speed_ratio(min_dist)
 
-        if self.escape_state == 'NONE' and all_blocked:
+        if not suppress_active and self.escape_state == 'NONE' and all_blocked:
             self.escape_state = 'REVERSE'
             self.escape_start_time = self.get_clock().now()
             self.escape_turn_dir = 'RIGHT' if left_avg > right_avg else 'LEFT'
@@ -260,8 +315,20 @@ class ObstacleAvoidance(Node):
             if elapsed >= self.turn_duration:
                 self.escape_state = 'NONE'
         else:
-            any_danger = any(d < self.safe_distance for d in zones)
-            if any_danger:
+            if suppress_active:
+                # An auto-tracked target (e.g. a plant) is being
+                # deliberately approached — proximity to it isn't a
+                # hazard, it's the goal. Don't second-guess detection_goto.
+                self._danger_active = False
+            elif self._danger_active:
+                # Stay in avoidance until well clear, not just barely clear,
+                # so the mode doesn't chatter on noisy readings near the edge.
+                self._danger_active = min_dist < (
+                    self.safe_distance + self.avoid_hysteresis)
+            else:
+                self._danger_active = min_dist < self.safe_distance
+
+            if self._danger_active:
                 if min(zones[:mid]) < min(zones[mid + 1:]):
                     cmd = 'TURN RIGHT'
                 else:
@@ -376,6 +443,7 @@ class ObstacleAvoidance(Node):
 
     def destroy_node(self):
         self.mjpeg_server.shutdown()
+        self.mjpeg_server.server_close()
         cv2.destroyAllWindows()
         super().destroy_node()
 

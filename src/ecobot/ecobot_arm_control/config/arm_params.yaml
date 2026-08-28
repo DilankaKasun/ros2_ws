@@ -1,0 +1,42 @@
+arm_scanner_node:
+  ros__parameters:
+    # Crop & Plant Scanning Configuration
+    # Ideal standoff distance from camera to plant foliage/stem: 0.20m
+    standoff: 0.20
+    standoff_min: 0.08
+    standoff_max: 0.28
+    standoff_step: 0.02
+    max_aim_error: 40.0
+
+    # Top-to-bottom sweep range: from pot base / soil (-0.18m) up to top canopy (+0.25m)
+    sweep_top_offset: 0.25
+    sweep_bottom_offset: -0.18
+    sweep_steps: 8
+
+    # Multi-angle orbit passes: -35° (left foliage), 0° (front stem), +35° (right foliage)
+    orbit_angles: [-35.0, 0.0, 35.0]
+
+    # Wrist Camera Lock-On Centering Parameters
+    lock_hfov: 73.3
+    lock_vfov: 58.3
+    lock_tolerance: 0.05
+    lock_max_iters: 6
+    lock_z_max_adjust: 0.08
+
+    # 'path' keeps wrist camera pointed level at each crop section (leaves, stem, base)
+    aim_height: path
+
+    # Hold time per viewpoint for image capture and focus analysis
+    dwell_time: 1.2
+
+    l0: 0.110
+    l1: 0.150
+    l2: 0.130
+    l3: 0.140
+    enable_detection_auto_scan: false
+
+    # Smooth Scan Velocity/Acceleration limits
+    scanning_peak_speed: 15.0
+    scanning_accel: 30.0
+    normal_peak_speed: 40.0
+    normal_accel: 90.0

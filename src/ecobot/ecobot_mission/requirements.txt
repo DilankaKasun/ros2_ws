@@ -1,0 +1,7 @@
+# Not available via rosdep/apt — install with:
+#   pip3 install --user -r requirements.txt
+
+# Gemini vision SDK (current unified SDK: google-genai)
+google-genai>=1.0
+
+python-dotenv

@@ -1,4 +1,5 @@
 import io
+import socket
 import struct
 import threading
 import time
@@ -9,6 +10,15 @@ from cv_bridge import CvBridge
 import cv2
 import numpy as np
 from http.server import HTTPServer, BaseHTTPRequestHandler
+
+
+class ReusableHTTPServer(HTTPServer):
+    allow_reuse_address = True
+
+    def server_bind(self):
+        if hasattr(socket, 'SO_REUSEPORT'):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        super().server_bind()
 
 
 class MjpegStreamHandler(BaseHTTPRequestHandler):
@@ -67,7 +77,7 @@ class CameraWebServer(Node):
         self.sub = self.create_subscription(
             Image, topic, self.image_callback, 10)
 
-        self.server = HTTPServer(('', port), MjpegStreamHandler)
+        self.server = ReusableHTTPServer(('', port), MjpegStreamHandler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.get_logger().info(f'camera web server on http://0.0.0.0:{port}/stream.mjpg')
@@ -83,6 +93,7 @@ class CameraWebServer(Node):
 
     def destroy_node(self):
         self.server.shutdown()
+        self.server.server_close()
         super().destroy_node()
 
 

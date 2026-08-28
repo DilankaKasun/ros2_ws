@@ -162,6 +162,11 @@ def generate_launch_description():
                 LaunchConfiguration('enable_detection')),
             parameters=[{
                 'model_path': '/home/ecobot/ros2_ws/src/ecobot/ecobot_sensors/models/yolov8n.engine',
+                # ultralytics' AutoBackend fails this .engine at inference time
+                # (TRT Error Code 1: Cask convolution execution on every frame)
+                # even though the same file runs cleanly under trtexec and under
+                # this node's own TrtBackend. Force the working path.
+                'backend': 'tensorrt',
                 'conf_threshold': 0.5,
                 'inference_rate': 2,
                 'depth_topic': '/camera/aligned_depth_to_color/image_raw',

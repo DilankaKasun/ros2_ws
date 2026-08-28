@@ -126,7 +126,11 @@ def generate_launch_description():
             output='screen',
         ),
         ExecuteProcess(
-            cmd=['ros2', 'run', 'rosbridge_server', 'rosbridge_websocket', '--port', '9090'],
+            cmd=['ros2', 'run', 'rosbridge_server', 'rosbridge_websocket',
+                 '--port', '9090', '--ros-args',
+                 '-p', 'default_call_service_timeout:=5.0',
+                 '-p', 'call_services_in_new_thread:=true',
+                 '-p', 'send_action_goals_in_new_thread:=true'],
             name='rosbridge_websocket',
             condition=IfCondition(
                 LaunchConfiguration('enable_rosbridge', default='true')),

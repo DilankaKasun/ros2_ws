@@ -178,7 +178,7 @@ class EcobotDetectionNode(Node):
         if backend_want in ('auto', 'ultralytics'):
             if ULTRALYTICS_AVAILABLE:
                 try:
-                    self.model = YOLO(model_path)
+                    self.model = YOLO(model_path, task='detect')
                     self.backend = 'ultralytics'
                     return
                 except Exception as e:

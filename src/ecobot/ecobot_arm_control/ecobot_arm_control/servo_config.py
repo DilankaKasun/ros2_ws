@@ -7,7 +7,7 @@ JOINTS = [
     {
         'name': 'arm_base_joint',
         'label': 'Base',
-        'channel': 1,
+        'channel': 0,
         'home_angle': 107,
         'min_angle': 0,
         'max_angle': 220,
@@ -21,7 +21,7 @@ JOINTS = [
     {
         'name': 'arm_shoulder_joint',
         'label': 'Shoulder',
-        'channel': 4,
+        'channel': 3,
         'home_angle': 125,
         'min_angle': 0,
         'max_angle': 125,
@@ -35,7 +35,7 @@ JOINTS = [
     {
         'name': 'arm_elbow_joint',
         'label': 'Elbow',
-        'channel': 3,
+        'channel': 1,
         'home_angle': 180,
         'min_angle': 0,
         'max_angle': 180,

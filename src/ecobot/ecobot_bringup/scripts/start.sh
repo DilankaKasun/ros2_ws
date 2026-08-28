@@ -48,9 +48,17 @@ done
 source /opt/ros/humble/setup.bash
 source ~/ros2_ws/install/setup.bash 2>/dev/null || true
 
-# Kill any stale existing processes
-pkill -f "motor_control_node|rosbridge|hardware_diagnostic_node" 2>/dev/null || true
-sleep 1
+# Kill any stale processes from a previous run. A prior start.sh may have died
+# without running its exit trap (closed terminal, dropped SSH session, kill -9),
+# which orphans "ros2 launch" and every node it started (reparented to init,
+# never receiving the shutdown signal). Left alive, those orphans collide with
+# the fresh instances below on I2C, cameras, and ports, and that contention is
+# what crashes nodes like arm_manual_node on the new launch. Match everything
+# this stack can start, not just the three names ecobot.launch.py used to run
+# directly, so a stale generation never lingers into the next run.
+ECOBOT_PROC_PATTERN="ros2_ws/install|ros2 launch ecobot_bringup|rosbridge_websocket|static_transform_publisher|lifecycle_manager|controller_server|planner_server|behavior_server|bt_navigator|depthimage_to_laserscan_node|robot_state_publisher|livekit_streamer"
+pkill -f "$ECOBOT_PROC_PATTERN" 2>/dev/null || true
+sleep 2
 
 # Source LiveKit env if present
 if [ -f "$HOME/ros2_ws/src/ecobot/ecobot_bringup/.env" ]; then
@@ -164,7 +172,8 @@ cleanup() {
   echo ""
   echo "Shutting down EcoBot stack..."
   kill $ROS_PID $WEB_PID $NEXT_PID $TUNNEL_PID 2>/dev/null || true
-  pkill -f "motor_control_node|rosbridge|hardware_diagnostic_node|http.server 8080|next-server|livekit_streamer" 2>/dev/null || true
+  sleep 1
+  pkill -f "$ECOBOT_PROC_PATTERN|http.server 8080|next-server" 2>/dev/null || true
   if [ -n "$TUNNEL_PID" ]; then
     kill -9 $TUNNEL_PID 2>/dev/null || true
   fi

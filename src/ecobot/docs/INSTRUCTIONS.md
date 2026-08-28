@@ -13,14 +13,13 @@ The project is built within a standard ROS 2 workspace (`ros2_ws`). The core pac
 - **`ecobot_sensors`**: Manages all sensor data inputs:
   - Intel RealSense camera (Color, Depth, PointClouds).
   - ESP32 Time-of-Flight (ToF) sensors (via Arduino firmware in `esp32_tof_sensors`).
-  - WebRTC and LiveKit streaming for remote viewing.
+  - LiveKit streaming for remote viewing.
   - Obstacle avoidance and object detection (YOLO).
   - Depth-to-LaserScan conversion for SLAM.
 - **`ecobot_navigation`**: Integrates the standard ROS 2 `Nav2` stack for autonomous navigation, path planning, and obstacle avoidance.
 - **`ecobot_arm_control`**: Controls the robotic arm via an I2C PCA9685 PWM driver. Supports manual joint control, inverse kinematics, and Vision-Language-Action (VLA) models (like Minicpm and OpenVLA).
 - **`ecobot_voice`**: A LiveKit-based voice agent worker that provides an interactive voice assistant interface.
 - **`ecobot_mission`**: Contains high-level behavior and mission scripts (e.g., `plant_mission_node`), acting as a state machine for autonomous operations.
-- **`ecobot_dashboard`**: A web-based dashboard server (default port `8080`) providing a UI to monitor and control the robot.
 
 ---
 
@@ -60,13 +59,9 @@ ros2 launch ecobot_bringup ecobot.launch.py \
   - **Node Launch**: `sensors.launch.py`
   - **Arguments**: 
     - `enable_obstacle_avoidance` (true/false)
-    - `enable_webrtc` / `enable_livekit` (true/false)
+    - `enable_livekit` (true/false)
     - `enable_legacy_detection` (true/false for YOLO)
   - **Setup**: Ensure the RealSense camera is connected. The node uses `cv_bridge` and `image_transport` to process and publish compressed streams.
-
-- **Dashboard (`ecobot_dashboard`)**
-  - **Node**: `dashboard_server`
-  - **Setup**: By default, it runs on port `8080`. Start it via the launch file and navigate to `http://localhost:8080` in your web browser.
 
 - **Voice Agent (`ecobot_voice`)**
   - **Node Launch**: `voice_agent.launch.py`
@@ -137,14 +132,7 @@ Ensure the arm node is running (`ros2 launch ecobot_arm_control arm_control.laun
 3. Use the **"2D Pose Estimate"** tool to initialize the robot's location.
 4. Use the **"Nav2 Goal"** tool to select a destination on the map. The robot should automatically compute a path and begin moving.
 
-### Testing the Dashboard
-1. Ensure the dashboard is running:
-   ```bash
-   ros2 launch ecobot_dashboard dashboard.launch.py
-   ```
-2. Open a web browser on your PC/network and go to `http://<ROBOT_IP>:8080/`. You should see the video feeds, robot pose, and control widgets.
-
-### Testing Voice / WebRTC
+### Testing Voice / Streaming
 - **MJPEG Streams**: Access directly via browser for debugging:
   - General Camera: `http://<ROBOT_IP>:8081/`
   - Obstacle Avoidance Camera: `http://<ROBOT_IP>:8086/obstacle.mjpg`

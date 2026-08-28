@@ -28,8 +28,6 @@ setup(
         'console_scripts': [
             'realsense_feed = ecobot_sensors.realsense_feed:main',
             'obstacle_avoidance = ecobot_sensors.obstacle_avoidance:main',
-            'camera_webserver = ecobot_sensors.camera_webserver:main',
-            'webrtc_streamer = ecobot_sensors.webrtc_streamer:main',
             'object_detection = ecobot_sensors.object_detection:main',
             'depth_ground_detection = ecobot_sensors.depth_ground_detection:main',
             'yolo_detection = ecobot_sensors.yolo_detection:main',

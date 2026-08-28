@@ -7,7 +7,6 @@ echo "=========================================="
 
 # Parse command-line options
 ENABLE_TUNNEL=false
-ENABLE_WEB=true
 ENABLE_DETECTION=true
 SERIAL_PORT="/dev/ttyACM0"
 
@@ -21,10 +20,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     --tunnel|-t)
       ENABLE_TUNNEL=true
-      shift
-      ;;
-    --no-web)
-      ENABLE_WEB=false
       shift
       ;;
     --no-detection)
@@ -58,6 +53,12 @@ source ~/ros2_ws/install/setup.bash 2>/dev/null || true
 # directly, so a stale generation never lingers into the next run.
 ECOBOT_PROC_PATTERN="ros2_ws/install|ros2 launch ecobot_bringup|rosbridge_websocket|static_transform_publisher|lifecycle_manager|controller_server|planner_server|behavior_server|bt_navigator|depthimage_to_laserscan_node|robot_state_publisher|livekit_streamer"
 pkill -f "$ECOBOT_PROC_PATTERN" 2>/dev/null || true
+
+# Services this script no longer starts (the 8080 static UI, the 3001 Next.js
+# server, the standalone WebRTC streamers) can still be running as orphans from
+# an older start.sh, holding their ports. Sweep them once so an upgraded script
+# does not leave the previous generation behind.
+pkill -f "http.server 8080|next-server|next start|webrtc_streamer|camera_webserver" 2>/dev/null || true
 sleep 2
 
 # Source LiveKit env if present
@@ -67,23 +68,11 @@ if [ -f "$HOME/ros2_ws/src/ecobot/ecobot_bringup/.env" ]; then
   set +a
 fi
 
-# 1. Start Web Dashboards (Next.js Port 3001 & Static UI Port 8080)
-WEB_PID=""
-NEXT_PID=""
-if [ "$ENABLE_WEB" = true ]; then
-  if [ -d "$HOME/ecobot-ui" ]; then
-    pkill -f "next-server|next start" 2>/dev/null || true
-    (cd "$HOME/ecobot-ui" && pnpm start >/dev/null 2>&1 &)
-    NEXT_PID=$!
-    echo "  [Next.js UI] Serving EcoBot Dashboard on http://0.0.0.0:3001"
-  fi
-  if [ -d "$HOME/remote_web_ui" ]; then
-    pkill -f "http.server 8080" 2>/dev/null || true
-    python3 -m http.server 8080 -d "$HOME/remote_web_ui" >/dev/null 2>&1 &
-    WEB_PID=$!
-    echo "  [Web UI] Serving fallback UI on http://0.0.0.0:8080"
-  fi
-fi
+# 1. Web dashboards are no longer served from the robot. The dashboard is the
+# Vercel-hosted ecobot-ui, which reaches the robot over rosbridge (port 9090)
+# and LiveKit, so the local Next.js server (3001) and the static fallback UI
+# (8080) were both redundant and have been removed. The ~/ecobot-ui and
+# ~/remote_web_ui folders are left on disk; nothing here starts them.
 
 # 2. Launch Cloudflare Tunnel if requested
 TUNNEL_PID=""
@@ -149,8 +138,7 @@ echo ""
 echo "=========================================="
 echo "          ECOBOT STACK IS ACTIVE          "
 echo "=========================================="
-echo "  Next.js Dashboard:  http://$LOCAL_IP:3001"
-echo "  Static Dashboard:   http://$LOCAL_IP:8080"
+echo "  Dashboard:          https://ecobot-ui.vercel.app"
 echo "  Rosbridge WS:       ws://$LOCAL_IP:9090"
 echo "  LiveKit Cloud:      wss://dialog-project-ew7yzd0u.livekit.cloud"
 echo "  LiveKit Room:       ecobot-control"
@@ -171,9 +159,9 @@ echo "Press Ctrl+C to stop all services."
 cleanup() {
   echo ""
   echo "Shutting down EcoBot stack..."
-  kill $ROS_PID $WEB_PID $NEXT_PID $TUNNEL_PID 2>/dev/null || true
+  kill $ROS_PID $TUNNEL_PID 2>/dev/null || true
   sleep 1
-  pkill -f "$ECOBOT_PROC_PATTERN|http.server 8080|next-server" 2>/dev/null || true
+  pkill -f "$ECOBOT_PROC_PATTERN" 2>/dev/null || true
   if [ -n "$TUNNEL_PID" ]; then
     kill -9 $TUNNEL_PID 2>/dev/null || true
   fi

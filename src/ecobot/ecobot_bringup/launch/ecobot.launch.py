@@ -53,7 +53,6 @@ def generate_launch_description():
                     '" == "true" or "', LaunchConfiguration('enable_localization', default='false'),
                     '" == "true"']),
                 'enable_detection': LaunchConfiguration('enable_detection', default='false'),
-                'enable_webrtc': LaunchConfiguration('enable_webrtc', default='true'),
                 'enable_livekit': LaunchConfiguration('enable_livekit', default='true'),
             }.items(),
             condition=IfCondition(

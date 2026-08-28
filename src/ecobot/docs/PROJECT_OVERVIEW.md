@@ -25,5 +25,5 @@ The Ecobot project is a ROS 2 Humble based mobile robot platform.
 ### Feasibility Analysis & Required Work:
 - Sensor Data: The current `realsense_feed.py` publishes only raw Image messages. It must be modified to publish `PointCloud2` data, or switched to the official `realsense2_camera` package.
 - Mapping Backend: A 3D SLAM or mapping package like `rtabmap_ros` or `octomap_ros` needs to be installed and integrated into the launch pipeline.
-- Dashboard Backend: `dashboard_server.py` needs to subscribe to the 3D map data and stream it efficiently via WebSocket.
+- Dashboard: the ecobot-ui frontend needs to subscribe to the 3D map data over rosbridge and render it efficiently.
 - Dashboard Frontend: `index.html` requires a 3D WebGL renderer (e.g., Three.js or ROS3D.js) to visualize the incoming map data.

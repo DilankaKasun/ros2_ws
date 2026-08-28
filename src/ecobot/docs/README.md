@@ -48,12 +48,6 @@ Manages the RealSense camera feed, object detection, obstacle avoidance, ground 
   - **Published topics:** `/camera/color/image_raw`, `/camera/depth/image_raw`, `/camera/aligned_depth_to_color/image_raw`, `/camera/color/camera_info`, `/camera/depth/camera_info`
   - **Parameters:** `color_width` (640), `color_height` (480), `color_fps` (30), `depth_width` (640), `depth_height` (480), `depth_fps` (30), `show_viewer` (False)
 
-- `camera_webserver` — MJPEG HTTP server on port 8081 serving `/camera/color/image_raw` as `/stream.mjpg`.
-  - **Parameters:** `port` (8081), `quality` (70), `topic` (`/camera/color/image_raw`)
-
-- `webrtc_streamer` — WebRTC signaling server on port 8082 with a `/offer` POST endpoint for low-latency video streaming via `aiortc`.
-  - **Parameters:** `signaling_port` (8082)
-
 - `object_detection` — Runs SSD MobileNet (Caffe) inference on color images at a configurable rate. Publishes bounding box overlays and JSON detection results with estimated distances from depth data.
   - **Published topics:** `/detection_overlay` (Image), `/detections` (String/JSON)
   - **Subscribed topics:** `/camera/color/image_raw`, `/camera/depth/image_raw`
@@ -69,7 +63,6 @@ Manages the RealSense camera feed, object detection, obstacle avoidance, ground 
   - **Subscribed topics:** `/camera/depth/image_raw`, `/camera/depth/camera_info`
   - **Parameters:** `camera_height` (0.508m), `ground_clearance` (0.02m), `max_obstacle_height` (0.50m), `min_obstacle_height` (0.005m), `max_range` (3.0m), `min_range` (0.2m), `downsample` (2), `mjpeg_port` (8084), `depth_scale` (0.001)
 
-- `chair_navigator` — Listens to `/detections` JSON for "chair" class detections, computes 3D position via depth + camera intrinsics, transforms to `odom` frame, offsets the goal by `goal_offset` meters, and sends a `NavigateToPose` action goal to Nav2. Includes cooldown and navigation-in-progress gating.
   - **Published topics:** `/chair_goal` (PoseStamped), `/chair_detected` (Bool)
   - **Subscribed topics:** `/detections` (String), `/camera/aligned_depth_to_color/image_raw`, `/camera/color/camera_info`
   - **Parameters:** `conf_threshold` (0.6), `goal_offset` (0.5m), `nav_timeout` (60.0s), `cooldown_sec` (5.0s)
@@ -130,14 +123,6 @@ Contains master launch files and utility nodes.
 ### `ecobot_bringup`
 Contains master launch files, `cmd_vel` mux configuration, and integration with RTAB-Map or `slam_toolbox` for mapping.
 
-### `ecobot_dashboard`
-Provides an aiohttp web UI on port 8080 featuring live camera feeds, odometry status, 2D/3D maps, detection results, and obstacle zone visualization. Communicates with the frontend via WebSocket.
-
-**Nodes:**
-- `dashboard_server` — aiohttp web server serving static files from `www/`, WebSocket endpoint at `/ws`, 2D map binary at `/map2d/data`, 3D point cloud at `/map3d/data`.
-  - **Subscribed topics:** `/odom`, `/run_mode`, `/camera/color/image_raw`, `/detection_overlay`, `/camera/depth/image_raw`, `/detections`, `/rtabmap/cloud_map`, `/rtabmap/map`, `/rtabmap/grid_prob_map`
-  - **Parameters:** `port` (8080), `depth_topic`, `camera_topic`, `detection_topic`, `num_zones` (5), `safe_distance` (0.9), `warn_distance` (1.1), `depth_scale` (0.001), `map3d_max_points` (80000)
-
 ## Data Flow & Navigation Logic
 
 1. **Sensing:** RealSense D415 captures 640×480 RGB and depth streams at 30 FPS.
@@ -158,9 +143,6 @@ Mapping can be performed using:
 
 | Service | Port | Endpoint | Description |
 |---------|------|----------|-------------|
-| Dashboard | 8080 | `/` | Main web UI (aiohttp + WebSocket) |
-| Camera MJPEG | 8081 | `/stream.mjpg` | Raw color camera stream |
-| WebRTC signaling | 8082 | `/offer` | Low-latency video (POST SDP offer) |
 | Obstacle MJPEG | 8083 | `/obstacle.mjpg` | Obstacle avoidance debug view |
 | Ground MJPEG | 8084 | `/ground.mjpg` | Ground detection debug view |
 | rosbridge | 9090 | WebSocket | ROS bridge for external clients |
@@ -200,14 +182,10 @@ camera_depth_optical_frame → camera_color_optical_frame  (static: x=0.018, y=0
 |------|---------|------------|---------|
 | `motor_control_node` | `ecobot_motor_control` | `motor_control_node` | Serial motor driver, odometry, TF |
 | `realsense_feed` | `ecobot_sensors` | `realsense_feed` | RealSense D415 RGB-D capture |
-| `camera_webserver` | `ecobot_sensors` | `camera_webserver` | MJPEG HTTP camera stream |
-| `webrtc_streamer` | `ecobot_sensors` | `webrtc_streamer` | WebRTC low-latency video |
 | `object_detection` | `ecobot_sensors` | `object_detection` | SSD MobileNet object detection |
 | `obstacle_avoidance` | `ecobot_sensors` | `obstacle_avoidance` | Reactive depth-based avoidance |
 | `depth_ground_detection` | `ecobot_sensors` | `depth_ground_detection` | Ground-level obstacle point cloud |
-| `chair_navigator` | `ecobot_sensors` | `chair_navigator` | Chair detection → Nav2 goal |
 | `waypoint_follower` | `ecobot_navigation` | `waypoint_follower` | CSV waypoint following |
-| `dashboard_server` | `ecobot_dashboard` | `dashboard_server` | Web UI (aiohttp + WebSocket) |
 | `cmd_vel_mux` | `ecobot_bringup` | `cmd_vel_mux` | Nav2 → cmd_vel relay |
 | `send_goal` | `ecobot_bringup` | `send_goal` | CLI Nav2 goal sender |
 

@@ -1,5 +1,5 @@
 from launch import LaunchDescription
-from launch.conditions import IfCondition, UnlessCondition
+from launch.conditions import IfCondition
 from launch_ros.actions import Node
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
@@ -8,7 +8,6 @@ from launch.substitutions import LaunchConfiguration
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('enable_obstacle_avoidance', default_value='false'),
-        DeclareLaunchArgument('enable_webrtc', default_value='true'),
         DeclareLaunchArgument('enable_livekit', default_value='true'),
         DeclareLaunchArgument('enable_detection', default_value='false'),
         DeclareLaunchArgument('enable_legacy_detection', default_value='false'),
@@ -70,33 +69,10 @@ def generate_launch_description():
         ),
         Node(
             package='ecobot_sensors',
-            executable='webrtc_streamer',
-            name='webrtc_streamer',
-            condition=IfCondition(
-                LaunchConfiguration('enable_webrtc')),
-            parameters=[{
-                'signaling_port': 8082,
-            }],
-            output='screen',
-        ),
-        Node(
-            package='ecobot_sensors',
             executable='livekit_streamer',
             name='livekit_streamer',
             condition=IfCondition(
                 LaunchConfiguration('enable_livekit')),
-            output='screen',
-        ),
-        Node(
-            package='ecobot_sensors',
-            executable='camera_webserver',
-            name='camera_webserver',
-            condition=UnlessCondition(
-                LaunchConfiguration('enable_webrtc')),
-            parameters=[{
-                'port': 8081,
-                'quality': 95,
-            }],
             output='screen',
         ),
         Node(

@@ -12,7 +12,6 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('enable_arm_camera', default_value='true'),
         DeclareLaunchArgument('enable_arm_scanner', default_value='true'),
-        DeclareLaunchArgument('enable_arm_webrtc', default_value='true'),
         DeclareLaunchArgument('enable_rl_agent', default_value='false'),
         DeclareLaunchArgument('enable_minicpm_vla', default_value='false'),
         DeclareLaunchArgument('enable_openvla', default_value='false'),
@@ -98,18 +97,6 @@ def generate_launch_description():
                 ('in', '/arm/camera/image_raw'),
                 ('out/compressed', '/arm/camera/image_raw/compressed'),
             ],
-            output='screen',
-        ),
-        Node(
-            package='ecobot_sensors',
-            executable='webrtc_streamer',
-            name='arm_webrtc_streamer',
-            condition=IfCondition(
-                LaunchConfiguration('enable_arm_webrtc')),
-            parameters=[{
-                'signaling_port': 8085,
-                'camera_topic': '/arm/camera/image_raw',
-            }],
             output='screen',
         ),
         Node(

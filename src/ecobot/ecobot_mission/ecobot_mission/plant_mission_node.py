@@ -6,10 +6,9 @@ wrist-camera JPEG at each viewpoint, send them to Gemini for a health
 assessment, then advance to the next waypoint (or wait for an operator
 "next" command, depending on auto_advance).
 
-Speaks the dashboard's pre-existing (previously unimplemented)
-/ecobot/plant_scan_cmd -> /ecobot/plant_scan_status /
-/ecobot/scan_capture contract (see ecobot_dashboard/dashboard_server.py
-and www/index.html) — no frontend changes needed. Talks to
+Speaks the dashboard's /ecobot/plant_scan_cmd -> /ecobot/plant_scan_status /
+/ecobot/scan_capture contract, consumed by the ecobot-ui dashboard over
+rosbridge — no frontend changes needed. Talks to
 arm_scanner_node purely over /arm/scanner_cmd + /arm/scanner_status; it is
 never modified or imported.
 """
@@ -544,7 +543,7 @@ class PlantMissionNode(Node):
     def _publish_scan_capture(self, label, jpeg_bytes):
         wp = self._waypoints[self._idx] if 0 <= self._idx < len(self._waypoints) else None
         payload = {
-            # dashboard_server._scan_capture_cb does bytes.fromhex(...) —
+            # The dashboard decodes this with bytes.fromhex(...) —
             # this MUST be a hex string, not base64.
             'image_jpeg': jpeg_bytes.hex(),
             'capture_count': len(self._current_captures),

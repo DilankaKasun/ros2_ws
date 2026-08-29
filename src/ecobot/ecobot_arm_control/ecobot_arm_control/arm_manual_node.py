@@ -9,6 +9,7 @@ import math
 from .pca9685_driver import PCA9685
 from .servo_config import (
     JOINTS, NUM_JOINTS, to_servo, to_ik, within_limits, apply_overrides,
+    ik_limits,
 )
 from .arm_kinematics import ArmKinematics
 
@@ -218,15 +219,16 @@ class ArmManualNode(Node):
         x, y, z = msg.data[0], msg.data[1], msg.data[2]
 
         # Joint limits live in servo space; shift them into the IK frame so the
-        # solver only returns poses the servos can actually hold.
-        lo = to_ik([JOINTS[i]['min_angle'] for i in range(NUM_JOINTS)])
-        hi = to_ik([JOINTS[i]['max_angle'] for i in range(NUM_JOINTS)])
+        # solver only returns poses the servos can actually hold. ik_limits()
+        # keeps each pair ordered, which matters for a joint whose direction is
+        # reversed relative to the model.
+        lim = ik_limits()
 
         result = self._ik.inverse(
             x, y, z,
-            theta2_min=lo[1], theta2_max=hi[1],
-            theta3_min=lo[2], theta3_max=hi[2],
-            theta4_min=lo[3], theta4_max=hi[3],
+            theta2_min=lim[1][0], theta2_max=lim[1][1],
+            theta3_min=lim[2][0], theta3_max=lim[2][1],
+            theta4_min=lim[3][0], theta4_max=lim[3][1],
         )
 
         if result is None:

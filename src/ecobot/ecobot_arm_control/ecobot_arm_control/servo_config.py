@@ -12,9 +12,8 @@ JOINTS = [
         'min_angle': 0,
         'max_angle': 220,
         'servo_range': 270,   # DS 3218
-        'angle_offset': -85,  # base servo 95 = straight ahead (+x). 95-180, so
-                              # the arm's working side reads as positive x
-                              # rather than reaching backwards into -x.
+        'angle_offset': 95,   # servo angle that points the arm straight ahead
+        'direction': 1,
         'pulse_min': 150,
         'pulse_max': 600,
         'speed': 1,
@@ -29,6 +28,7 @@ JOINTS = [
         'max_angle': 125,
         'servo_range': 180,   # TD 8130MG
         'angle_offset': -98,    # measured: lower link sits 38 deg above the floor at home
+        'direction': 1,
         'pulse_min': 150,
         'pulse_max': 600,
         'speed': 1,
@@ -43,6 +43,7 @@ JOINTS = [
         'max_angle': 180,
         'servo_range': 180,   # TD 8130MG
         'angle_offset': 67,     # measured: 67 deg interior angle at the elbow at home
+        'direction': 1,
         'pulse_min': 150,
         'pulse_max': 600,
         'speed': 1,
@@ -57,6 +58,7 @@ JOINTS = [
         'max_angle': 180,     # Wrist max angle set to 180 deg
         'servo_range': 180,   # MG 996R
         'angle_offset': -39,    # measured: 116 deg interior angle at the wrist at home
+        'direction': -1,  # wrist bends opposite to the model's sense
         'pulse_min': 150,
         'pulse_max': 600,
         'speed': 1,
@@ -95,14 +97,26 @@ def apply_overrides(overrides):
 
 def to_servo(ik_angles):
     """IK-frame angles -> servo angles."""
-    return [float(a) + JOINTS[i]['angle_offset']
+    return [float(a) * JOINTS[i].get('direction', 1) + JOINTS[i]['angle_offset']
             for i, a in enumerate(ik_angles)]
 
 
 def to_ik(servo_angles):
     """Servo angles -> IK-frame angles."""
-    return [float(a) - JOINTS[i]['angle_offset']
+    return [(float(a) - JOINTS[i]['angle_offset']) * JOINTS[i].get('direction', 1)
             for i, a in enumerate(servo_angles)]
+
+
+def ik_limits():
+    """Per-joint (min, max) in the IK frame, correctly ordered.
+
+    A joint with direction -1 maps its servo minimum to the larger IK value,
+    so the pair has to be re-sorted; handing an inverted range to the solver
+    would reject every pose.
+    """
+    lo = to_ik([j['min_angle'] for j in JOINTS])
+    hi = to_ik([j['max_angle'] for j in JOINTS])
+    return [(min(a, b), max(a, b)) for a, b in zip(lo, hi)]
 
 
 def within_limits(servo_angles):

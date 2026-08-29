@@ -21,12 +21,16 @@ def launch_setup(context, *args, **kwargs):
 
     nodes = []
 
-    # 1) Depth -> LaserScan (always on)
-    nodes.append(
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(depth_to_scan_launch),
+    # 1) Depth -> LaserScan. Skippable: ecobot.launch.py already starts this
+    # under enable_sensors, so including it again here would double-launch
+    # depth_to_scan/scan_filter under identical node names and corrupt the
+    # scan feed slam_toolbox/AMCL rely on.
+    if LaunchConfiguration('enable_depth_to_scan').perform(context) == 'true':
+        nodes.append(
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(depth_to_scan_launch),
+            )
         )
-    )
 
     # 2) map_server (only if map path is given)
     if map_path:
@@ -137,6 +141,12 @@ def generate_launch_description():
             'map',
             default_value=default_map,
             description='Path to map YAML file (empty for mapless)'),
+        DeclareLaunchArgument(
+            'enable_depth_to_scan',
+            default_value='true',
+            description='Start depth_to_scan/scan_filter here. Set false '
+                        'when the including launch file already starts it '
+                        '(e.g. ecobot.launch.py with enable_sensors:=true).'),
         DeclareLaunchArgument(
             'database_path',
             default_value=os.path.expanduser('~/.ros/rtabmap.db'),

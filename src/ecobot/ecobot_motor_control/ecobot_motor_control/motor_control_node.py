@@ -287,16 +287,22 @@ class MotorControlNode(Node):
         diff_l = self.encoder_l - self.prev_encoder_l
         diff_r = self.encoder_r - self.prev_encoder_r
 
+        # Discard an implausible jump, but still take the new reading as the
+        # baseline for the next one. Rolling the encoder back to prev instead
+        # pinned prev in place, so every later delta was measured from that
+        # stale value and grew until it tripped the guard too — one glitch
+        # latched odometry off for the rest of the session, leaving the robot
+        # reporting itself stationary while the wheels turned.
         if abs(diff_l) > self.max_allowed_delta:
             self.get_logger().warn(
-                f'outlier left encoder delta={diff_l} > {self.max_allowed_delta}')
-            self.encoder_l = self.prev_encoder_l
+                f'outlier left encoder delta={diff_l} > '
+                f'{self.max_allowed_delta}; skipping this sample')
             diff_l = 0
 
         if abs(diff_r) > self.max_allowed_delta:
             self.get_logger().warn(
-                f'outlier right encoder delta={diff_r} > {self.max_allowed_delta}')
-            self.encoder_r = self.prev_encoder_r
+                f'outlier right encoder delta={diff_r} > '
+                f'{self.max_allowed_delta}; skipping this sample')
             diff_r = 0
 
         linear_x, angular_z = encoder_delta_to_twist(

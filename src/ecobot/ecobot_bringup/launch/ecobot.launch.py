@@ -85,6 +85,11 @@ def generate_launch_description():
             launch_arguments={
                 'scan_matcher': LaunchConfiguration('scan_matcher', default='slam_toolbox'),
                 'map': LaunchConfiguration('map', default=default_map),
+                # depth_to_scan is already started above under enable_sensors;
+                # including it again here would double-launch it.
+                'enable_depth_to_scan': PythonExpression([
+                    '"false" if "', LaunchConfiguration('enable_sensors', default='true'),
+                    '" == "true" else "true"']),
             }.items(),
             condition=IfCondition(
                 LaunchConfiguration('enable_localization', default='false')),

@@ -54,54 +54,99 @@ class ArmKinematics:
         if cos_elbow < -1.001 or cos_elbow > 1.001:
             return None
         cos_elbow = max(-1.0, min(cos_elbow, 1.0))
-        theta3 = math.degrees(math.acos(cos_elbow))
-        if not (theta3_min <= theta3 <= theta3_max):
-            return None
+        elbow = math.degrees(math.acos(cos_elbow))
 
         alpha = math.atan2(wr, self.L0 - wz) if d > 1e-6 else 0.0
-        beta = math.atan2(
-            self.L2 * math.sin(math.radians(theta3)),
-            self.L1 + self.L2 * math.cos(math.radians(theta3)),
-        )
-        theta2 = math.degrees(alpha - beta)
-        if not (theta2_min <= theta2 <= theta2_max):
-            return None
 
-        return theta2, theta3
+        # acos only ever returns 0..180, which is the elbow-down branch. The
+        # mirrored elbow-up pose reaches the same point and is often the only
+        # one inside the joint limits, so both are offered.
+        out = []
+        for theta3 in (elbow, -elbow):
+            if not (theta3_min <= theta3 <= theta3_max):
+                continue
+            beta = math.atan2(
+                self.L2 * math.sin(math.radians(theta3)),
+                self.L1 + self.L2 * math.cos(math.radians(theta3)),
+            )
+            theta2 = math.degrees(alpha - beta)
+            # The same shoulder pose a full turn away is equally valid, and
+            # may be the representation that falls inside the limits.
+            for t2 in (theta2, theta2 - 360.0, theta2 + 360.0):
+                if theta2_min <= t2 <= theta2_max:
+                    out.append((t2, theta3))
+                    break
+
+        return out or None
 
     def inverse(self, x, y, z,
                 theta2_min=0, theta2_max=180,
                 theta3_min=0, theta3_max=180,
-                theta4_min=0, theta4_max=180):
+                theta4_min=0, theta4_max=180,
+                theta1_min=-180, theta1_max=180,
+                seed=None):
         """Position-only IK: camera tip reaches (x, y, z). The wrist angle
         theta4 (and therefore the camera aim) is NOT constrained — it is
         whatever the phi sweep lands on, which is why naive scanning swings
-        the camera around aimlessly. Prefer inverse_aim() for camera work."""
-        r = math.sqrt(x ** 2 + y ** 2)
-        theta1 = math.degrees(math.atan2(y, x))
+        the camera around aimlessly. Prefer inverse_aim() for camera work.
 
-        for phi in range(-90, 271, 3):
-            phi_rad = math.radians(phi)
+        A point can be reached two ways: the base faces it and the arm
+        extends outward, or the base faces away and the arm folds back over
+        itself with a negative radius. Only checking the first missed poses
+        the arm actually holds — its own home pose reaches +x with the base
+        at 180 degrees — so both are tried here, and theta1 is checked
+        against the base limits rather than returned blind.
 
-            wr = r - self.L3 * math.sin(phi_rad)
-            wz = z + self.L3 * math.cos(phi_rad)
+        Among the candidates found, the one needing the least total joint
+        movement from `seed` is returned, so the arm takes the nearer route
+        instead of whichever branch happened to be swept first.
+        """
+        base = math.degrees(math.atan2(y, x))
+        radius = math.sqrt(x ** 2 + y ** 2)
 
-            plane = self._solve_plane(
-                wr, wz,
-                theta2_min, theta2_max,
-                theta3_min, theta3_max,
-            )
-            if plane is None:
-                continue
-            theta2, theta3 = plane
+        candidates = []
+        # (theta1, signed radius): facing the point, and facing away from it.
+        for theta1, r in ((base, radius), (base + 180.0, -radius)):
+            # A base angle out of range may still be legal a turn away.
+            for t1 in (theta1, theta1 - 360.0, theta1 + 360.0):
+                if not (theta1_min <= t1 <= theta1_max):
+                    continue
 
-            theta4 = phi - theta2 - theta3
-            if not (theta4_min <= theta4 <= theta4_max):
-                continue
+                # Sweep the whole circle. The old -90..270 window silently
+                # excluded poses the arm genuinely holds — its home pose puts
+                # the last link at 305 degrees.
+                for phi in range(-180, 361, 2):
+                    phi_rad = math.radians(phi)
 
-            return theta1, theta2, theta3, theta4
+                    wr = r - self.L3 * math.sin(phi_rad)
+                    wz = z + self.L3 * math.cos(phi_rad)
 
-        return None
+                    plane = self._solve_plane(
+                        wr, wz,
+                        theta2_min, theta2_max,
+                        theta3_min, theta3_max,
+                    )
+                    if plane is None:
+                        continue
+
+                    for theta2, theta3 in plane:
+                        theta4 = phi - theta2 - theta3
+                        for t4 in (theta4, theta4 - 360.0, theta4 + 360.0):
+                            if theta4_min <= t4 <= theta4_max:
+                                candidates.append((t1, theta2, theta3, t4))
+                                break
+                break
+
+        if not candidates:
+            return None
+
+        if seed is None:
+            return candidates[0]
+
+        def travel(c):
+            return sum(abs(c[i] - seed[i]) for i in range(min(4, len(seed))))
+
+        return min(candidates, key=travel)
 
     def inverse_aim(self, sx, sy, sz, ax, ay, az,
                     theta2_min=0, theta2_max=180,
@@ -152,7 +197,7 @@ class ArmKinematics:
             )
             if plane is None:
                 continue
-            theta2, theta3 = plane
+            theta2, theta3 = plane[0]
 
             theta4 = phi - theta2 - theta3
             if not (theta4_min <= theta4 <= theta4_max):

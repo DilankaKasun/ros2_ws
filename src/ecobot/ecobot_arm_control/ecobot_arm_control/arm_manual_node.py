@@ -272,6 +272,9 @@ class ArmManualNode(Node):
             theta2_min=lim[1][0], theta2_max=lim[1][1],
             theta3_min=lim[2][0], theta3_max=lim[2][1],
             theta4_min=lim[3][0], theta4_max=lim[3][1],
+            theta1_min=lim[0][0], theta1_max=lim[0][1],
+            # Prefer whichever solution moves the arm least from where it is.
+            seed=to_ik(self._current),
         )
 
         if result is None:

@@ -35,9 +35,9 @@ class Test4DOFJointControl(unittest.TestCase):
         self.assertEqual(len(JOINTS), 4)
 
         expected_joints = [
-            ('arm_base_joint', 1, 0.0, 220.0, 270.0),
-            ('arm_shoulder_joint', 4, 0.0, 125.0, 180.0),
-            ('arm_elbow_joint', 3, 0.0, 180.0, 180.0),
+            ('arm_base_joint', 3, 0.0, 220.0, 270.0),
+            ('arm_shoulder_joint', 0, 0.0, 125.0, 180.0),
+            ('arm_elbow_joint', 1, 0.0, 180.0, 180.0),
             ('arm_wrist_joint', 2, 0.0, 180.0, 180.0),
         ]
 
@@ -60,11 +60,11 @@ class Test4DOFJointControl(unittest.TestCase):
         ik_sample = [0.0, 45.0, 90.0, 30.0]
         servo_sample = to_servo(ik_sample)
         
-        # Base in servo space should be 0 + 95 = 95
-        self.assertAlmostEqual(servo_sample[0], 95.0, places=3)
-        self.assertAlmostEqual(servo_sample[1], 45.0, places=3)
-        self.assertAlmostEqual(servo_sample[2], 90.0, places=3)
-        self.assertAlmostEqual(servo_sample[3], 30.0, places=3)
+        # Base in servo space: ik 0 maps through offset -85
+        self.assertAlmostEqual(servo_sample[0], -85.0, places=3)
+        self.assertAlmostEqual(servo_sample[1], 45.0 - 98.0, places=3)
+        self.assertAlmostEqual(servo_sample[2], 90.0 + 67.0, places=3)
+        self.assertAlmostEqual(servo_sample[3], -30.0 + 89.0, places=3)
 
         # Round-trip transformation
         recovered_ik = to_ik(servo_sample)
@@ -98,38 +98,38 @@ class Test4DOFJointControl(unittest.TestCase):
     # -------------------------------------------------------------------------
     def test_4dof_forward_kinematics(self):
         """Verify forward kinematics computation for known 4-DOF arm geometry."""
-        ik = ArmKinematics(l0=0.110, l1=0.150, l2=0.130, l3=0.140)
+        ik = ArmKinematics(l0=0.320, l1=0.165, l2=0.140, l3=0.090)
 
         # 1. Straight down pose: th1=0, th2=0, th3=0, th4=0
-        # r = 0, z = L0 - (L1 + L2 + L3) = 0.110 - 0.420 = -0.310
+        # r = 0, z = L0 - (L1 + L2 + L3) = 0.320 - 0.395 = -0.075
         x, y, z = ik.forward(0, 0, 0, 0)
         self.assertAlmostEqual(x, 0.0, places=3)
         self.assertAlmostEqual(y, 0.0, places=3)
-        self.assertAlmostEqual(z, 0.110 - (0.150 + 0.130 + 0.140), places=3)
+        self.assertAlmostEqual(z, 0.320 - (0.165 + 0.140 + 0.090), places=3)
 
         # 2. Horizontal pose: th1=0, th2=90, th3=0, th4=0
-        # r = L1 + L2 + L3 = 0.420, z = L0 = 0.110, x = 0.420, y = 0
+        # r = L1 + L2 + L3 = 0.395, z = L0 = 0.320, x = 0.395, y = 0
         x, y, z = ik.forward(0, 90, 0, 0)
-        self.assertAlmostEqual(x, 0.420, places=3)
+        self.assertAlmostEqual(x, 0.395, places=3)
         self.assertAlmostEqual(y, 0.0, places=3)
-        self.assertAlmostEqual(z, 0.110, places=3)
+        self.assertAlmostEqual(z, 0.320, places=3)
 
-        # 3. Base rotation 90 deg: x=0, y=0.420
+        # 3. Base rotation 90 deg: x=0, y=0.395
         x, y, z = ik.forward(90, 90, 0, 0)
         self.assertAlmostEqual(x, 0.0, places=3)
-        self.assertAlmostEqual(y, 0.420, places=3)
-        self.assertAlmostEqual(z, 0.110, places=3)
+        self.assertAlmostEqual(y, 0.395, places=3)
+        self.assertAlmostEqual(z, 0.320, places=3)
 
     def test_4dof_inverse_kinematics_position(self):
         """Verify 4-DOF position-only inverse kinematics for reachable workspaces."""
-        ik = ArmKinematics(l0=0.110, l1=0.150, l2=0.130, l3=0.140)
+        ik = ArmKinematics(l0=0.320, l1=0.165, l2=0.140, l3=0.090)
 
         # Test points within reachable envelope
         test_points = [
-            (0.25, 0.0, 0.10),
-            (0.20, 0.10, 0.05),
-            (0.15, -0.15, 0.15),
-            (0.30, 0.0, 0.0),
+            (-0.25, 0.0, 0.55),
+            (-0.20, 0.10, 0.55),
+            (-0.15, -0.15, 0.60),
+            (-0.30, 0.0, 0.55),
         ]
 
         for tx, ty, tz in test_points:
@@ -146,15 +146,15 @@ class Test4DOFJointControl(unittest.TestCase):
 
     def test_4dof_unreachable_ik_handling(self):
         """Verify IK correctly identifies points outside reachable envelope."""
-        ik = ArmKinematics(l0=0.110, l1=0.150, l2=0.130, l3=0.140)
+        ik = ArmKinematics(l0=0.320, l1=0.165, l2=0.140, l3=0.090)
         
-        # Max reach is L1 + L2 + L3 = 0.420m
+        # Max reach is L1 + L2 + L3 = 0.395m
         self.assertFalse(ik.is_reachable(0.80, 0.0, 0.10))
         self.assertIsNone(ik.inverse(0.80, 0.0, 0.10))
 
     def test_4dof_orientation_aiming_ik(self):
         """Verify orientation-aware 4-DOF IK places wrist at standoff and aims camera at target."""
-        ik = ArmKinematics(l0=0.110, l1=0.150, l2=0.130, l3=0.140)
+        ik = ArmKinematics(l0=0.320, l1=0.165, l2=0.140, l3=0.090)
 
         # Standoff position and aim point (e.g. camera looking at a plant on table)
         sx, sy, sz = 0.28, 0.0, 0.10
@@ -268,7 +268,7 @@ class Test4DOFJointControl(unittest.TestCase):
         node = ArmManualNode()
         
         pose_msg = Float64MultiArray()
-        pose_msg.data = [0.22, 0.0, 0.12]
+        pose_msg.data = [-0.20, 0.0, 0.55]
         node._pose_cb(pose_msg)
 
         # Target should be updated with a valid IK solution within limits
@@ -277,9 +277,9 @@ class Test4DOFJointControl(unittest.TestCase):
         # Verify FK of the target angles reaches approximately the requested pose
         ik_angles = to_ik(node._target)
         fx, fy, fz = node._ik.forward(*ik_angles)
-        self.assertAlmostEqual(fx, 0.22, delta=0.01)
+        self.assertAlmostEqual(fx, -0.20, delta=0.01)
         self.assertAlmostEqual(fy, 0.0, delta=0.01)
-        self.assertAlmostEqual(fz, 0.12, delta=0.01)
+        self.assertAlmostEqual(fz, 0.55, delta=0.01)
 
         node.destroy_node()
 
@@ -363,7 +363,7 @@ class Test4DOFJointControl(unittest.TestCase):
 
         scanner = ArmScannerNode()
         cmd = String()
-        cmd.data = json.dumps({'action': 'scan', 'x': 0.35, 'y': 0.0, 'z': 0.10, 'plant_type': 'test_crop'})
+        cmd.data = json.dumps({'action': 'scan', 'x': -0.25, 'y': 0.0, 'z': 0.55, 'plant_type': 'test_crop'})
         scanner._scanner_cmd_cb(cmd)
 
         self.assertTrue(scanner._scanning)

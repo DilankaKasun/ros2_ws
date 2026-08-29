@@ -34,10 +34,10 @@ class ArmCameraCalibrate(Node):
     def __init__(self, out_yaml=None):
         super().__init__('arm_camera_calibrate')
 
-        self.declare_parameter('l0', 0.110)
-        self.declare_parameter('l1', 0.150)
-        self.declare_parameter('l2', 0.130)
-        self.declare_parameter('l3', 0.140)
+        self.declare_parameter('l0', 0.320)
+        self.declare_parameter('l1', 0.165)
+        self.declare_parameter('l2', 0.140)
+        self.declare_parameter('l3', 0.090)
 
         self._ik = ArmKinematics(
             self.get_parameter('l0').value,

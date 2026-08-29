@@ -55,6 +55,7 @@ DEFAULT_READABLE = {
     '/arm/joint_angles': 0.05,
     '/arm/pose': 0.10,
     '/arm/status': 0.25,
+    '/arm/pose_goal_result': 0.05,
     '/arm/scanner_status': 0.25,
     '/ecobot/hardware_status': 1.00,
     '/ecobot/detections': 0.25,

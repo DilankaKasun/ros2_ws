@@ -29,10 +29,10 @@ arm_scanner_node:
     # Hold time per viewpoint for image capture and focus analysis
     dwell_time: 1.2
 
-    l0: 0.110
-    l1: 0.150
-    l2: 0.130
-    l3: 0.140
+    l0: 0.320
+    l1: 0.165
+    l2: 0.140
+    l3: 0.090
     enable_detection_auto_scan: false
 
     # Smooth Scan Velocity/Acceleration limits

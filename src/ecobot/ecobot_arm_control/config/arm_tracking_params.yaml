@@ -11,9 +11,9 @@ arm_target_tracker:
     transform_ty: 0.0
     transform_tz: 0.0
     transform_yaw: 0.0
-    l0: 0.110
-    l1: 0.150
-    l2: 0.130
-    l3: 0.140
+    l0: 0.320
+    l1: 0.165
+    l2: 0.140
+    l3: 0.090
     sweep_step: 0.02
     sweep_max: 0.15

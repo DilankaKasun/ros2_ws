@@ -24,10 +24,10 @@ class ArmManualNode(Node):
         self.declare_parameter('cmd_timeout', 0.0)
         self.declare_parameter('move_interval_ms', 15)
         self.declare_parameter('home_ramp_steps', 50)
-        self.declare_parameter('l0', 0.110)
-        self.declare_parameter('l1', 0.150)
-        self.declare_parameter('l2', 0.130)
-        self.declare_parameter('l3', 0.140)
+        self.declare_parameter('l0', 0.320)
+        self.declare_parameter('l1', 0.165)
+        self.declare_parameter('l2', 0.140)
+        self.declare_parameter('l3', 0.090)
         # Smooth trapezoidal velocity profile. peak_speed deg/s, accel deg/s^2.
         self.declare_parameter('peak_speed', 90.0)
         self.declare_parameter('accel', 250.0)
@@ -121,6 +121,9 @@ class ArmManualNode(Node):
         self._status_pub = self.create_publisher(
             String, '/arm/status', 10)
 
+        self._goal_result_pub = self.create_publisher(
+            String, '/arm/pose_goal_result', 10)
+
         self._timer = self.create_timer(
             self._move_interval, self._timer_cb)
 
@@ -209,14 +212,54 @@ class ArmManualNode(Node):
         elif msg.data == 'disable':
             self._disable_servos()
 
+    def _pub_goal_result(self, status, target=None, angles=None, reason=''):
+        """Report the outcome of a pose goal.
+
+        Every rejection path used to only log, so a client that sent an
+        unreachable goal saw nothing happen and could not tell a rejected
+        target from a lost message.
+        """
+        payload = {'status': status, 'reason': reason}
+        if target is not None:
+            payload['target'] = [round(float(v), 4) for v in target]
+        if angles is not None:
+            payload['angles'] = [round(float(a), 1) for a in angles]
+            payload['joints'] = [j['label'] for j in JOINTS]
+        msg = String()
+        msg.data = json.dumps(payload)
+        self._goal_result_pub.publish(msg)
+
+    def _reach_check(self, x, y, z):
+        """Whether the tip could reach (x, y, z) ignoring joint limits.
+
+        Separates 'the arm is not long enough' from 'the arm is long enough
+        but a joint cannot bend that way', which need different fixes.
+        """
+        span = self._ik.L1 + self._ik.L2 + self._ik.L3
+        d = math.sqrt(x * x + y * y + (z - self._ik.L0) ** 2)
+        if d > span:
+            return False, (f'{d * 100:.1f}cm from the shoulder pivot, but the '
+                           f'arm only spans {span * 100:.1f}cm')
+        return True, ''
+
     def _pose_cb(self, msg):
         self._ramping_home = False
         if len(msg.data) < 3:
             self.get_logger().warn(
                 f'Expected [x, y, z], got {len(msg.data)} values')
+            self._pub_goal_result(
+                'bad_request',
+                reason=f'expected [x, y, z], got {len(msg.data)} values')
             return
 
         x, y, z = msg.data[0], msg.data[1], msg.data[2]
+        target = (x, y, z)
+
+        in_span, why = self._reach_check(x, y, z)
+        if not in_span:
+            self.get_logger().warn(f'Out of reach {target}: {why}')
+            self._pub_goal_result('out_of_reach', target, reason=why)
+            return
 
         # Joint limits live in servo space; shift them into the IK frame so the
         # solver only returns poses the servos can actually hold. ik_limits()
@@ -233,14 +276,23 @@ class ArmManualNode(Node):
 
         if result is None:
             self.get_logger().warn(
-                f'Unreachable pose: ({x:.3f}, {y:.3f}, {z:.3f})')
+                f'No IK solution within joint limits for {target}')
+            self._pub_goal_result(
+                'no_solution', target,
+                reason='within the arm\'s span, but no joint combination '
+                       'inside the limits reaches it')
             return
 
         angles = to_servo(result)
         if not within_limits(angles):
-            self.get_logger().warn(
-                f'Pose ({x:.3f}, {y:.3f}, {z:.3f}) needs base angle '
-                f'{angles[0]:.0f}, outside joint limits')
+            bad = [f'{JOINTS[i]["label"]} {angles[i]:.0f} deg outside '
+                   f'{JOINTS[i]["min_angle"]}..{JOINTS[i]["max_angle"]}'
+                   for i in range(NUM_JOINTS)
+                   if not (JOINTS[i]['min_angle'] <= angles[i]
+                           <= JOINTS[i]['max_angle'])]
+            self.get_logger().warn(f'Pose {target} outside limits: {bad}')
+            self._pub_goal_result(
+                'joint_limits', target, angles, reason='; '.join(bad))
             return
 
         th1, th2, th3, th4 = angles
@@ -257,6 +309,8 @@ class ArmManualNode(Node):
                 self._force_write = True
             except Exception as e:
                 self.get_logger().error(f'Enable failed: {e}')
+                self._pub_goal_result(
+                    'error', target, angles, reason=f'servo enable failed: {e}')
                 return
 
         for i, ang in enumerate([th1, th2, th3, th4]):
@@ -264,6 +318,7 @@ class ArmManualNode(Node):
         self._plan_traj()
         self._last_cmd_time = self.get_clock().now()
         self._pub_status('enabled')
+        self._pub_goal_result('ok', target, angles)
 
     def _disable_servos(self):
         if self._pca is not None and self._enabled:

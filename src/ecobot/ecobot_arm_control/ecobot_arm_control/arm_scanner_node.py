@@ -47,10 +47,10 @@ class ArmScannerNode(Node):
         self.declare_parameter('orbit_angles', [0.0])   # deg relative to approach
         self.declare_parameter('aim_height', 'center')  # 'center' | 'path'
         self.declare_parameter('dwell_time', 1.2)
-        self.declare_parameter('l0', 0.110)
-        self.declare_parameter('l1', 0.150)
-        self.declare_parameter('l2', 0.130)
-        self.declare_parameter('l3', 0.140)
+        self.declare_parameter('l0', 0.320)
+        self.declare_parameter('l1', 0.165)
+        self.declare_parameter('l2', 0.140)
+        self.declare_parameter('l3', 0.090)
         self.declare_parameter('recovery_timeout_s', 4.0)
         # Off by default: this legacy path auto-starts a scan on the very
         # first raw /ecobot/detections message. Kept for anyone who still

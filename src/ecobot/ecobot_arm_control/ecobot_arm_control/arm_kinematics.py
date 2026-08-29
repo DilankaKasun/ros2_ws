@@ -3,7 +3,7 @@ import math
 
 class ArmKinematics:
 
-    def __init__(self, l0=0.110, l1=0.150, l2=0.130, l3=0.140):
+    def __init__(self, l0=0.320, l1=0.165, l2=0.140, l3=0.090):
         self.L0 = l0
         self.L1 = l1
         self.L2 = l2

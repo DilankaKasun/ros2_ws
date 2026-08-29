@@ -52,7 +52,7 @@ load_dotenv(find_dotenv(usecwd=True))
 # Topics the robot streams out to the room, with the minimum seconds between
 # sends for each. These are telemetry, so a dropped sample is harmless.
 DEFAULT_READABLE = {
-    '/arm/joint_angles': 0.10,
+    '/arm/joint_angles': 0.05,
     '/arm/pose': 0.10,
     '/arm/status': 0.25,
     '/arm/scanner_status': 0.25,

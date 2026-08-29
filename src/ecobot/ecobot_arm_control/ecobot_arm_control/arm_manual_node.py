@@ -30,6 +30,9 @@ class ArmManualNode(Node):
         # Smooth trapezoidal velocity profile. peak_speed deg/s, accel deg/s^2.
         self.declare_parameter('peak_speed', 90.0)
         self.declare_parameter('accel', 250.0)
+        # Angular resolution of commanded motion. At 1.0 the arm steps through
+        # whole degrees; peak_speed is capped so no tick skips one.
+        self.declare_parameter('step_deg', 1.0)
         self.declare_parameter('overrides', '{}')
 
         self._i2c_bus = self.get_parameter('i2c_bus').value
@@ -40,6 +43,7 @@ class ArmManualNode(Node):
         self._home_ramp_steps = self.get_parameter('home_ramp_steps').value
         self._peak_speed = self.get_parameter('peak_speed').value
         self._accel = self.get_parameter('accel').value
+        self._step_deg = float(self.get_parameter('step_deg').value)
         try:
             apply_overrides(json.loads(
                 str(self.get_parameter('overrides').value)))
@@ -298,6 +302,11 @@ class ArmManualNode(Node):
         self._accel = self.get_parameter('accel').value
         v = max(1.0, float(self._peak_speed))
         a = max(1.0, float(self._accel))
+
+        # Never advance the fastest joint by more than step_deg in one tick, so
+        # the arm passes through every whole degree instead of skipping some.
+        if self._step_deg > 0.0 and self._move_interval > 0.0:
+            v = min(v, self._step_deg / self._move_interval)
         t_acc = v / a
         d_acc = 0.5 * a * t_acc * t_acc
         if max_disp >= 2.0 * d_acc:
@@ -341,9 +350,23 @@ class ArmManualNode(Node):
             s = D - 0.5 * (v / T_acc) * tre * tre
         frac = max(0.0, min(1.0, s / D))
         return [
-            self._traj_start[i] + frac * (self._target[i] - self._traj_start[i])
+            self._quantize(
+                self._traj_start[i]
+                + frac * (self._target[i] - self._traj_start[i]))
             for i in range(NUM_JOINTS)
         ]
+
+    def _quantize(self, angle: float) -> float:
+        """Snap to the nearest step_deg boundary.
+
+        Without this the profile reports continuous fractions, so a client
+        watching /arm/joint_angles sees 40.6, 41.2, 41.8 rather than whole
+        degrees. Snapping here also means the pulse written to the servo is
+        the same value the UI displays.
+        """
+        if self._step_deg <= 0.0:
+            return float(angle)
+        return round(float(angle) / self._step_deg) * self._step_deg
 
     def _timer_cb(self):
         now = self.get_clock().now()

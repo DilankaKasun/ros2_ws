@@ -18,10 +18,10 @@ LED0_ON_L = 0x06
 
 # Joint definitions from servo_config
 JOINTS = [
-    {'name': 'Base',     'channel': 0, 'min': 20, 'max': 180, 'home': 107, 'range': 270},
-    {'name': 'Shoulder', 'channel': 3, 'min': 10, 'max': 110, 'home': 125, 'range': 180},
+    {'name': 'Base',     'channel': 3, 'min': 20, 'max': 180, 'home': 95, 'range': 270},
+    {'name': 'Shoulder', 'channel': 0, 'min': 10, 'max': 110, 'home': 30, 'range': 180},
     {'name': 'Elbow',    'channel': 1, 'min': 10, 'max': 170, 'home': 180, 'range': 180},
-    {'name': 'Wrist',    'channel': 2, 'min': 10, 'max': 170, 'home': 45,  'range': 180},
+    {'name': 'Wrist',    'channel': 2, 'min': 10, 'max': 170, 'home': 25,  'range': 180},
 ]
 
 class PCA9685Driver:

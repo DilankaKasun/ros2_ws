@@ -7,8 +7,8 @@ JOINTS = [
     {
         'name': 'arm_base_joint',
         'label': 'Base',
-        'channel': 0,
-        'home_angle': 107,
+        'channel': 3,
+        'home_angle': 95,
         'min_angle': 0,
         'max_angle': 220,
         'servo_range': 270,   # DS 3218
@@ -21,8 +21,8 @@ JOINTS = [
     {
         'name': 'arm_shoulder_joint',
         'label': 'Shoulder',
-        'channel': 3,
-        'home_angle': 125,
+        'channel': 0,
+        'home_angle': 30,
         'min_angle': 0,
         'max_angle': 125,
         'servo_range': 180,   # TD 8130MG
@@ -50,7 +50,7 @@ JOINTS = [
         'name': 'arm_wrist_joint',
         'label': 'Wrist',
         'channel': 2,
-        'home_angle': 45,
+        'home_angle': 25,
         'min_angle': 0,
         'max_angle': 180,     # Wrist max angle set to 180 deg
         'servo_range': 180,   # MG 996R

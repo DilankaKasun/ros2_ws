@@ -18,8 +18,9 @@ def generate_launch_description():
         DeclareLaunchArgument('enable_adaptive_target', default_value='false'),
         DeclareLaunchArgument('vla_prompt', default_value='reach forward'),
         DeclareLaunchArgument('vla_dry_run', default_value='false'),
-        DeclareLaunchArgument('peak_speed', default_value='40.0'),
+        DeclareLaunchArgument('peak_speed', default_value='20.0'),
         DeclareLaunchArgument('accel', default_value='90.0'),
+        DeclareLaunchArgument('step_deg', default_value='1.0'),
 
         Node(
             package='ecobot_arm_control',
@@ -42,6 +43,7 @@ def generate_launch_description():
                     'home_ramp_steps', default=50),
                 'peak_speed': LaunchConfiguration('peak_speed'),
                 'accel': LaunchConfiguration('accel'),
+                'step_deg': LaunchConfiguration('step_deg'),
                 'overrides': ParameterValue(
                     LaunchConfiguration('overrides', default='{}'),
                     value_type=str),

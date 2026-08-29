@@ -29,7 +29,7 @@ class ArmManualNode(Node):
         self.declare_parameter('l2', 0.135)
         self.declare_parameter('l3', 0.050)
         # Fixed bracket from the base servo tip out to the shoulder pivot.
-        self.declare_parameter('off_r', 0.040)
+        self.declare_parameter('off_r', -0.040)
         self.declare_parameter('off_z', 0.080)
         # Smooth trapezoidal velocity profile. peak_speed deg/s, accel deg/s^2.
         self.declare_parameter('peak_speed', 90.0)
@@ -242,8 +242,13 @@ class ArmManualNode(Node):
         Separates 'the arm is not long enough' from 'the arm is long enough
         but a joint cannot bend that way', which need different fixes.
         """
-        span = self._ik.L1 + self._ik.L2 + self._ik.L3
-        d = math.sqrt(x * x + y * y + (z - self._ik.L0) ** 2)
+        span = self._ik.span
+        # Distance is to the shoulder pivot, not the base. The pivot rides
+        # round with the base yaw, so the closest it can get to a target at
+        # radius R is R minus the bracket's radial reach — whichever way the
+        # bracket leans, since the solver tries the base both ways.
+        radial = max(0.0, math.hypot(x, y) - abs(self._ik.OFF_R))
+        d = math.hypot(radial, z - self._ik.pivot_z)
         if d > span:
             return False, (f'{d * 100:.1f}cm from the shoulder pivot, but the '
                            f'arm only spans {span * 100:.1f}cm')

@@ -110,16 +110,16 @@ class Test4DOFJointControl(unittest.TestCase):
         self.assertAlmostEqual(z, ik.pivot_z - ik.span, places=3)
 
         # 2. Horizontal pose: th1=0, th2=90, th3=0, th4=0
-        # r = OFF_R + L1+L2+L3 = 0.390, z = L0+OFF_Z = 0.380
+        # r = OFF_R + L1+L2+L3 = 0.310, z = L0+OFF_Z = 0.380
         x, y, z = ik.forward(0, 90, 0, 0)
         self.assertAlmostEqual(x, ik.pivot_r + ik.span, places=3)
         self.assertAlmostEqual(y, 0.0, places=3)
         self.assertAlmostEqual(z, ik.pivot_z, places=3)
 
-        # 3. Base rotation 90 deg: x=0, y=0.390
+        # 3. Base rotation 90 deg: x=0, y=OFF_R + span = 0.310
         x, y, z = ik.forward(90, 90, 0, 0)
         self.assertAlmostEqual(x, 0.0, places=3)
-        self.assertAlmostEqual(y, 0.390, places=3)
+        self.assertAlmostEqual(y, 0.310, places=3)
         self.assertAlmostEqual(z, ik.pivot_z, places=3)
 
     def test_4dof_inverse_kinematics_position(self):
@@ -150,7 +150,7 @@ class Test4DOFJointControl(unittest.TestCase):
         """Verify IK correctly identifies points outside reachable envelope."""
         ik = ArmKinematics()
         
-        # Max reach is L1 + L2 + L3 = 0.390m
+        # Max reach is L1 + L2 + L3 = 0.310m
         self.assertFalse(ik.is_reachable(0.80, 0.0, 0.10))
         self.assertIsNone(ik.inverse(0.80, 0.0, 0.10))
 
@@ -162,8 +162,8 @@ class Test4DOFJointControl(unittest.TestCase):
         lim = ik_limits()
 
         # Standoff position and aim point (camera looking outward at a plant)
-        sx, sy, sz = 0.20, 0.0, 0.40
-        ax, ay, az = 0.32, 0.0, 0.40
+        sx, sy, sz = 0.20, 0.0, 0.55
+        ax, ay, az = 0.30, 0.0, 0.55
 
         sol = ik.inverse_aim(sx, sy, sz, ax, ay, az,
                              theta2_min=lim[1][0], theta2_max=lim[1][1],

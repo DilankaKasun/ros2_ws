@@ -4,14 +4,15 @@ import math
 class ArmKinematics:
 
     def __init__(self, l0=0.300, l1=0.165, l2=0.135, l3=0.050,
-                 off_r=0.040, off_z=0.080):
+                 off_r=-0.040, off_z=0.080):
         """Link geometry, in metres.
 
         l0 is ground to the base servo tip. The shoulder link does not start
-        there: it is carried out and up by a fixed bracket, off_r radially and
-        off_z vertically, and that offset turns with the base yaw. Treating
-        the shoulder as sitting on the base axis put every solved pose off by
-        that bracket.
+        there: it is carried back and up by a fixed bracket, off_r radially
+        and off_z vertically, and that offset turns with the base yaw. off_r
+        is negative because the bracket leans back over the base rather than
+        out ahead of it. Treating the shoulder as sitting on the base axis
+        put every solved pose off by that bracket.
         """
         self.L0 = l0
         self.L1 = l1

@@ -12,7 +12,7 @@ JOINTS = [
         'min_angle': 0,
         'max_angle': 220,
         'servo_range': 270,   # DS 3218
-        'angle_offset': 95,   # servo angle that points the arm straight ahead
+        'angle_offset': -85,  # +x is the direction the last link points at home
         'direction': 1,
         'pulse_min': 150,
         'pulse_max': 600,
@@ -58,7 +58,7 @@ JOINTS = [
         'max_angle': 180,     # Wrist max angle set to 180 deg
         'servo_range': 180,   # MG 996R
         'angle_offset': -39,    # measured: 116 deg interior angle at the wrist at home
-        'direction': -1,  # wrist bends opposite to the model's sense
+        'direction': 1,
         'pulse_min': 150,
         'pulse_max': 600,
         'speed': 1,

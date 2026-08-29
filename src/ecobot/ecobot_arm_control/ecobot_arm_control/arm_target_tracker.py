@@ -8,7 +8,9 @@ from rclpy.executors import ExternalShutdownException
 from std_msgs.msg import Float64MultiArray, String
 
 from .arm_kinematics import ArmKinematics
-from .servo_config import JOINTS, NUM_JOINTS, to_ik
+from .servo_config import (
+    JOINTS, NUM_JOINTS, to_ik, ik_limits,
+)
 
 
 class ArmTargetTracker(Node):
@@ -34,10 +36,10 @@ class ArmTargetTracker(Node):
         self.declare_parameter('transform_ty', 0.0)
         self.declare_parameter('transform_tz', 0.0)
         self.declare_parameter('transform_yaw', 0.0)
-        self.declare_parameter('l0', 0.320)
+        self.declare_parameter('l0', 0.300)
         self.declare_parameter('l1', 0.165)
-        self.declare_parameter('l2', 0.140)
-        self.declare_parameter('l3', 0.090)
+        self.declare_parameter('l2', 0.135)
+        self.declare_parameter('l3', 0.050)
         self.declare_parameter('sweep_step', 0.02)
         self.declare_parameter('sweep_max', 0.15)
 
@@ -233,8 +235,12 @@ class ArmTargetTracker(Node):
         r = math.hypot(ox, oy)
         ux, uy = ox / r, oy / r
 
-        lo = to_ik([JOINTS[i]['min_angle'] for i in range(NUM_JOINTS)])
-        hi = to_ik([JOINTS[i]['max_angle'] for i in range(NUM_JOINTS)])
+        # ik_limits keeps each pair ordered; a reversed joint maps its servo
+        # minimum to the larger IK value, and an inverted range rejects
+        # every pose.
+        _lim = ik_limits()
+        lo = [q[0] for q in _lim]
+        hi = [q[1] for q in _lim]
 
         distance = max(0.0, r - self._standoff)
         max_back = self._standoff + self._sweep_max
@@ -245,6 +251,7 @@ class ArmTargetTracker(Node):
                 theta2_min=lo[1], theta2_max=hi[1],
                 theta3_min=lo[2], theta3_max=hi[2],
                 theta4_min=lo[3], theta4_max=hi[3],
+                theta1_min=lo[0], theta1_max=hi[0],
             )
             if result is not None:
                 return tx, ty, oz

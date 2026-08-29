@@ -24,10 +24,13 @@ class ArmManualNode(Node):
         self.declare_parameter('cmd_timeout', 0.0)
         self.declare_parameter('move_interval_ms', 15)
         self.declare_parameter('home_ramp_steps', 50)
-        self.declare_parameter('l0', 0.320)
+        self.declare_parameter('l0', 0.300)
         self.declare_parameter('l1', 0.165)
-        self.declare_parameter('l2', 0.140)
-        self.declare_parameter('l3', 0.090)
+        self.declare_parameter('l2', 0.135)
+        self.declare_parameter('l3', 0.050)
+        # Fixed bracket from the base servo tip out to the shoulder pivot.
+        self.declare_parameter('off_r', 0.040)
+        self.declare_parameter('off_z', 0.080)
         # Smooth trapezoidal velocity profile. peak_speed deg/s, accel deg/s^2.
         self.declare_parameter('peak_speed', 90.0)
         self.declare_parameter('accel', 250.0)
@@ -76,7 +79,11 @@ class ArmManualNode(Node):
         l1 = self.get_parameter('l1').value
         l2 = self.get_parameter('l2').value
         l3 = self.get_parameter('l3').value
-        self._ik = ArmKinematics(l0, l1, l2, l3)
+        self._ik = ArmKinematics(
+            l0, l1, l2, l3,
+            off_r=self.get_parameter('off_r').value,
+            off_z=self.get_parameter('off_z').value,
+        )
 
         try:
             self._pca = PCA9685(

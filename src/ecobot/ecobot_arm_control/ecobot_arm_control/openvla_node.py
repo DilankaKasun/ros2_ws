@@ -50,7 +50,7 @@ class OpenVLANode(Node):
 
         # Arm kinematics & default joints (Base=107, Shoulder=125, Elbow=180, Wrist=50)
         self._current_joint_angles = [107.0, 125.0, 180.0, 50.0]
-        self._ik = ArmKinematics(0.320, 0.165, 0.140, 0.090)
+        self._ik = ArmKinematics(0.300, 0.165, 0.135, 0.050)
 
         self._processor = None
         self._vla_model = None

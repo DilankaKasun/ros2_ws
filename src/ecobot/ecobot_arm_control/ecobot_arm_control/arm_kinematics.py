@@ -3,11 +3,37 @@ import math
 
 class ArmKinematics:
 
-    def __init__(self, l0=0.320, l1=0.165, l2=0.140, l3=0.090):
+    def __init__(self, l0=0.300, l1=0.165, l2=0.135, l3=0.050,
+                 off_r=0.040, off_z=0.080):
+        """Link geometry, in metres.
+
+        l0 is ground to the base servo tip. The shoulder link does not start
+        there: it is carried out and up by a fixed bracket, off_r radially and
+        off_z vertically, and that offset turns with the base yaw. Treating
+        the shoulder as sitting on the base axis put every solved pose off by
+        that bracket.
+        """
         self.L0 = l0
         self.L1 = l1
         self.L2 = l2
         self.L3 = l3
+        self.OFF_R = off_r
+        self.OFF_Z = off_z
+
+    @property
+    def pivot_r(self):
+        """Radial distance from the base axis to the shoulder pivot."""
+        return self.OFF_R
+
+    @property
+    def pivot_z(self):
+        """Height of the shoulder pivot above the ground."""
+        return self.L0 + self.OFF_Z
+
+    @property
+    def span(self):
+        """Furthest the tip can get from the shoulder pivot."""
+        return self.L1 + self.L2 + self.L3
 
     def forward(self, theta1, theta2, theta3, theta4):
         th1 = math.radians(theta1)
@@ -18,13 +44,13 @@ class ArmKinematics:
         th23 = th2 + th3
         th234 = th23 + th4
 
-        r = (
+        r = self.pivot_r + (
             self.L1 * math.sin(th2)
             + self.L2 * math.sin(th23)
             + self.L3 * math.sin(th234)
         )
 
-        z = self.L0 - (
+        z = self.pivot_z - (
             self.L1 * math.cos(th2)
             + self.L2 * math.cos(th23)
             + self.L3 * math.cos(th234)
@@ -40,7 +66,8 @@ class ArmKinematics:
                      theta3_min, theta3_max):
         """2-link IK in the arm plane: shoulder/elbow to put the wrist joint
         at (wr, wz). Returns (theta2, theta3) or None."""
-        d_sq = wr ** 2 + (wz - self.L0) ** 2
+        wr = wr - self.pivot_r
+        d_sq = wr ** 2 + (wz - self.pivot_z) ** 2
         d = math.sqrt(d_sq)
 
         if d > self.L1 + self.L2 + 0.001:
@@ -56,7 +83,7 @@ class ArmKinematics:
         cos_elbow = max(-1.0, min(cos_elbow, 1.0))
         elbow = math.degrees(math.acos(cos_elbow))
 
-        alpha = math.atan2(wr, self.L0 - wz) if d > 1e-6 else 0.0
+        alpha = math.atan2(wr, self.pivot_z - wz) if d > 1e-6 else 0.0
 
         # acos only ever returns 0..180, which is the elbow-down branch. The
         # mirrored elbow-up pose reaches the same point and is often the only
@@ -152,6 +179,7 @@ class ArmKinematics:
                     theta2_min=0, theta2_max=180,
                     theta3_min=0, theta3_max=180,
                     theta4_min=0, theta4_max=180,
+                    theta1_min=-180, theta1_max=180,
                     phi_step=1.0):
         """Orientation-aware IK: put the wrist/camera tip at standoff point
         (sx, sy, sz) AND point the camera (last link, angle th234=phi) at the
@@ -163,8 +191,24 @@ class ArmKinematics:
         limits. Returns (theta1, theta2, theta3, theta4) or None if the
         position is unreachable at all.
         """
-        r_c = math.sqrt(sx ** 2 + sy ** 2)
-        theta1 = math.degrees(math.atan2(sy, sx))
+        # Same two branches as inverse(): face the point, or face away and
+        # fold back over the base on a negative radius. Checking only the
+        # first leaves poses the arm can hold unreachable.
+        base = math.degrees(math.atan2(sy, sx))
+        radius = math.sqrt(sx ** 2 + sy ** 2)
+
+        theta1 = None
+        r_c = None
+        for cand_t1, cand_r in ((base, radius), (base + 180.0, -radius)):
+            for t1 in (cand_t1, cand_t1 - 360.0, cand_t1 + 360.0):
+                if theta1_min <= t1 <= theta1_max:
+                    theta1, r_c = t1, cand_r
+                    break
+            if theta1 is not None:
+                break
+        if theta1 is None:
+            return None
+
         cos_t = math.cos(math.radians(theta1))
         sin_t = math.sin(math.radians(theta1))
 
@@ -185,7 +229,7 @@ class ArmKinematics:
 
         # Sweep phi around the desired orientation, keeping whichever
         # reachable pose aims the camera closest to the line of sight.
-        for phi in range(-90, 271):
+        for phi in range(-180, 361):
             ph = math.radians(phi)
             wr = r_c - self.L3 * math.sin(ph)
             wz = sz + self.L3 * math.cos(ph)
@@ -197,26 +241,28 @@ class ArmKinematics:
             )
             if plane is None:
                 continue
-            theta2, theta3 = plane[0]
 
-            theta4 = phi - theta2 - theta3
-            if not (theta4_min <= theta4 <= theta4_max):
-                continue
+            # _solve_plane offers both elbow branches; weigh each, since the
+            # one that aims best is not always the first.
+            for theta2, theta3 in plane:
+                theta4 = phi - theta2 - theta3
+                if not (theta4_min <= theta4 <= theta4_max):
+                    continue
 
-            # Aim error: angle between actual camera direction and the line
-            # from the camera to the aim point.
-            to_r = r_p - r_c
-            to_z = z_p - sz
-            norm = math.hypot(to_r, to_z)
-            if norm < 1e-6:
-                return theta1, theta2, theta3, theta4
-            cos_err = (math.sin(ph) * to_r - math.cos(ph) * to_z) / norm
-            cos_err = max(-1.0, min(cos_err, 1.0))
-            err = math.degrees(math.acos(cos_err))
+                # Aim error: angle between actual camera direction and the
+                # line from the camera to the aim point.
+                to_r = r_p - r_c
+                to_z = z_p - sz
+                norm = math.hypot(to_r, to_z)
+                if norm < 1e-6:
+                    return theta1, theta2, theta3, theta4
+                cos_err = (math.sin(ph) * to_r - math.cos(ph) * to_z) / norm
+                cos_err = max(-1.0, min(cos_err, 1.0))
+                err = math.degrees(math.acos(cos_err))
 
-            if err < best_err:
-                best_err = err
-                best = (theta1, theta2, theta3, theta4)
+                if err < best_err:
+                    best_err = err
+                    best = (theta1, theta2, theta3, theta4)
 
         return best
 

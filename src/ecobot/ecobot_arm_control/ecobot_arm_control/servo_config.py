@@ -27,7 +27,7 @@ JOINTS = [
         'min_angle': 0,
         'max_angle': 125,
         'servo_range': 180,   # TD 8130MG
-        'angle_offset': -98,    # measured: lower link sits 38 deg above the floor at home
+        'angle_offset': -143,    # measured: lower link sits 83 deg above the floor at home
         'direction': 1,
         'pulse_min': 150,
         'pulse_max': 600,
@@ -42,7 +42,7 @@ JOINTS = [
         'min_angle': 0,
         'max_angle': 180,
         'servo_range': 180,   # TD 8130MG
-        'angle_offset': 67,     # measured: 67 deg interior angle at the elbow at home
+        'angle_offset': 70,      # measured: 70 deg interior angle at the elbow at home
         'direction': 1,
         'pulse_min': 150,
         'pulse_max': 600,
@@ -57,8 +57,7 @@ JOINTS = [
         'min_angle': 0,
         'max_angle': 180,     # Wrist max angle set to 180 deg
         'servo_range': 180,   # MG 996R
-        'angle_offset': 89,     # with direction -1 this holds the measured 116 deg
-                              # interior angle at home while reversing the sense
+        'angle_offset': 92,      # measured: 113 deg interior angle at the wrist at home
         'direction': -1,
         'pulse_min': 150,
         'pulse_max': 600,

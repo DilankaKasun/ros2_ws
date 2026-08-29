@@ -9,7 +9,8 @@ from std_msgs.msg import Float64MultiArray, String
 from sensor_msgs.msg import JointState
 
 from ecobot_arm_control.servo_config import (
-    JOINTS, NUM_JOINTS, to_servo, to_ik, within_limits, apply_overrides
+    JOINTS, NUM_JOINTS, to_servo, to_ik, within_limits, apply_overrides,
+    ik_limits,
 )
 from ecobot_arm_control.arm_kinematics import ArmKinematics
 from ecobot_arm_control.arm_manual_node import ArmManualNode
@@ -62,9 +63,9 @@ class Test4DOFJointControl(unittest.TestCase):
         
         # Base in servo space: ik 0 maps through offset -85
         self.assertAlmostEqual(servo_sample[0], -85.0, places=3)
-        self.assertAlmostEqual(servo_sample[1], 45.0 - 98.0, places=3)
-        self.assertAlmostEqual(servo_sample[2], 90.0 + 67.0, places=3)
-        self.assertAlmostEqual(servo_sample[3], -30.0 + 89.0, places=3)
+        self.assertAlmostEqual(servo_sample[1], 45.0 - 143.0, places=3)
+        self.assertAlmostEqual(servo_sample[2], 90.0 + 70.0, places=3)
+        self.assertAlmostEqual(servo_sample[3], -30.0 + 92.0, places=3)
 
         # Round-trip transformation
         recovered_ik = to_ik(servo_sample)
@@ -98,38 +99,39 @@ class Test4DOFJointControl(unittest.TestCase):
     # -------------------------------------------------------------------------
     def test_4dof_forward_kinematics(self):
         """Verify forward kinematics computation for known 4-DOF arm geometry."""
-        ik = ArmKinematics(l0=0.320, l1=0.165, l2=0.140, l3=0.090)
+        ik = ArmKinematics()
 
         # 1. Straight down pose: th1=0, th2=0, th3=0, th4=0
-        # r = 0, z = L0 - (L1 + L2 + L3) = 0.320 - 0.395 = -0.075
+        # r = OFF_R, z = (L0+OFF_Z) - (L1+L2+L3) = 0.380 - 0.350 = 0.030
         x, y, z = ik.forward(0, 0, 0, 0)
-        self.assertAlmostEqual(x, 0.0, places=3)
+        # x is the bracket offset, not zero: the shoulder sits off the axis.
+        self.assertAlmostEqual(x, ik.pivot_r, places=3)
         self.assertAlmostEqual(y, 0.0, places=3)
-        self.assertAlmostEqual(z, 0.320 - (0.165 + 0.140 + 0.090), places=3)
+        self.assertAlmostEqual(z, ik.pivot_z - ik.span, places=3)
 
         # 2. Horizontal pose: th1=0, th2=90, th3=0, th4=0
-        # r = L1 + L2 + L3 = 0.395, z = L0 = 0.320, x = 0.395, y = 0
+        # r = OFF_R + L1+L2+L3 = 0.390, z = L0+OFF_Z = 0.380
         x, y, z = ik.forward(0, 90, 0, 0)
-        self.assertAlmostEqual(x, 0.395, places=3)
+        self.assertAlmostEqual(x, ik.pivot_r + ik.span, places=3)
         self.assertAlmostEqual(y, 0.0, places=3)
-        self.assertAlmostEqual(z, 0.320, places=3)
+        self.assertAlmostEqual(z, ik.pivot_z, places=3)
 
-        # 3. Base rotation 90 deg: x=0, y=0.395
+        # 3. Base rotation 90 deg: x=0, y=0.390
         x, y, z = ik.forward(90, 90, 0, 0)
         self.assertAlmostEqual(x, 0.0, places=3)
-        self.assertAlmostEqual(y, 0.395, places=3)
-        self.assertAlmostEqual(z, 0.320, places=3)
+        self.assertAlmostEqual(y, 0.390, places=3)
+        self.assertAlmostEqual(z, ik.pivot_z, places=3)
 
     def test_4dof_inverse_kinematics_position(self):
         """Verify 4-DOF position-only inverse kinematics for reachable workspaces."""
-        ik = ArmKinematics(l0=0.320, l1=0.165, l2=0.140, l3=0.090)
+        ik = ArmKinematics()
 
         # Test points within reachable envelope
         test_points = [
-            (-0.25, 0.0, 0.55),
-            (-0.20, 0.10, 0.55),
-            (-0.15, -0.15, 0.60),
-            (-0.30, 0.0, 0.55),
+            (0.20, 0.0, 0.40),
+            (0.0, 0.10, 0.60),
+            (0.15, -0.15, 0.55),
+            (0.25, 0.0, 0.45),
         ]
 
         for tx, ty, tz in test_points:
@@ -146,24 +148,28 @@ class Test4DOFJointControl(unittest.TestCase):
 
     def test_4dof_unreachable_ik_handling(self):
         """Verify IK correctly identifies points outside reachable envelope."""
-        ik = ArmKinematics(l0=0.320, l1=0.165, l2=0.140, l3=0.090)
+        ik = ArmKinematics()
         
-        # Max reach is L1 + L2 + L3 = 0.395m
+        # Max reach is L1 + L2 + L3 = 0.390m
         self.assertFalse(ik.is_reachable(0.80, 0.0, 0.10))
         self.assertIsNone(ik.inverse(0.80, 0.0, 0.10))
 
     def test_4dof_orientation_aiming_ik(self):
         """Verify orientation-aware 4-DOF IK places wrist at standoff and aims camera at target."""
-        ik = ArmKinematics(l0=0.320, l1=0.165, l2=0.140, l3=0.090)
+        # Use the arm's real geometry and limits rather than invented ones,
+        # so this exercises poses the hardware can actually hold.
+        ik = ArmKinematics()
+        lim = ik_limits()
 
-        # Standoff position and aim point (e.g. camera looking at a plant on table)
-        sx, sy, sz = 0.28, 0.0, 0.10
-        ax, ay, az = 0.38, 0.0, 0.10
+        # Standoff position and aim point (camera looking outward at a plant)
+        sx, sy, sz = 0.20, 0.0, 0.40
+        ax, ay, az = 0.32, 0.0, 0.40
 
         sol = ik.inverse_aim(sx, sy, sz, ax, ay, az,
-                             theta2_min=0, theta2_max=125,
-                             theta3_min=0, theta3_max=180,
-                             theta4_min=-90, theta4_max=180)
+                             theta2_min=lim[1][0], theta2_max=lim[1][1],
+                             theta3_min=lim[2][0], theta3_max=lim[2][1],
+                             theta4_min=lim[3][0], theta4_max=lim[3][1],
+                             theta1_min=lim[0][0], theta1_max=lim[0][1])
         self.assertIsNotNone(sol, "inverse_aim should find solution for valid standoff/aim pair")
         
         # Check FK position at camera tip
@@ -268,7 +274,7 @@ class Test4DOFJointControl(unittest.TestCase):
         node = ArmManualNode()
         
         pose_msg = Float64MultiArray()
-        pose_msg.data = [-0.20, 0.0, 0.55]
+        pose_msg.data = [0.20, 0.0, 0.40]
         node._pose_cb(pose_msg)
 
         # Target should be updated with a valid IK solution within limits
@@ -277,9 +283,9 @@ class Test4DOFJointControl(unittest.TestCase):
         # Verify FK of the target angles reaches approximately the requested pose
         ik_angles = to_ik(node._target)
         fx, fy, fz = node._ik.forward(*ik_angles)
-        self.assertAlmostEqual(fx, -0.20, delta=0.01)
+        self.assertAlmostEqual(fx, 0.20, delta=0.01)
         self.assertAlmostEqual(fy, 0.0, delta=0.01)
-        self.assertAlmostEqual(fz, 0.55, delta=0.01)
+        self.assertAlmostEqual(fz, 0.40, delta=0.01)
 
         node.destroy_node()
 
@@ -363,7 +369,7 @@ class Test4DOFJointControl(unittest.TestCase):
 
         scanner = ArmScannerNode()
         cmd = String()
-        cmd.data = json.dumps({'action': 'scan', 'x': -0.25, 'y': 0.0, 'z': 0.55, 'plant_type': 'test_crop'})
+        cmd.data = json.dumps({'action': 'scan', 'x': 0.20, 'y': 0.0, 'z': 0.40, 'plant_type': 'test_crop'})
         scanner._scanner_cmd_cb(cmd)
 
         self.assertTrue(scanner._scanning)
@@ -387,13 +393,15 @@ class Test4DOFJointControl(unittest.TestCase):
         published_goals = []
         tracker._pose_pub.publish = lambda msg: published_goals.append(list(msg.data))
 
-        # Send detection message
+        # Detections arrive in the camera optical frame (x right, y down,
+        # z forward), which _cam_to_arm remaps to the arm frame. These values
+        # put the object at arm (0.30, 0, 0.45), inside the workspace.
         det_msg = String()
         det_msg.data = json.dumps([{
             'class': 'bottle',
             'x': 0.0,
-            'y': 0.0,
-            'z': 0.35,
+            'y': -0.45,
+            'z': 0.30,
             'confidence': 0.90
         }])
         tracker._det_cb(det_msg)
@@ -402,7 +410,7 @@ class Test4DOFJointControl(unittest.TestCase):
         self.assertGreater(len(published_goals), 0, "Target tracker must publish pose goal for valid detection")
         goal = published_goals[0]
         self.assertEqual(len(goal), 3, "Pose goal must be 3D Cartesian coordinates [x, y, z]")
-        self.assertAlmostEqual(goal[0], 0.25, delta=0.05)
+        self.assertAlmostEqual(goal[0], 0.20, delta=0.05)
 
         tracker.destroy_node()
 

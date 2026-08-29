@@ -13,7 +13,9 @@ import time
 import numpy as np
 
 from .arm_kinematics import ArmKinematics
-from .servo_config import JOINTS, NUM_JOINTS, to_servo, to_ik, within_limits
+from .servo_config import (
+    JOINTS, NUM_JOINTS, to_servo, to_ik, within_limits, ik_limits,
+)
 
 
 class ArmScannerNode(Node):
@@ -47,10 +49,10 @@ class ArmScannerNode(Node):
         self.declare_parameter('orbit_angles', [0.0])   # deg relative to approach
         self.declare_parameter('aim_height', 'center')  # 'center' | 'path'
         self.declare_parameter('dwell_time', 1.2)
-        self.declare_parameter('l0', 0.320)
+        self.declare_parameter('l0', 0.300)
         self.declare_parameter('l1', 0.165)
-        self.declare_parameter('l2', 0.140)
-        self.declare_parameter('l3', 0.090)
+        self.declare_parameter('l2', 0.135)
+        self.declare_parameter('l3', 0.050)
         self.declare_parameter('recovery_timeout_s', 4.0)
         # Off by default: this legacy path auto-starts a scan on the very
         # first raw /ecobot/detections message. Kept for anyone who still
@@ -228,8 +230,12 @@ class ArmScannerNode(Node):
         camera 0.08 m from the plant where it could not focus). A candidate is
         only accepted if its forward kinematics actually lands the camera on
         the requested standoff point. Returns (servo_angles, aim_err)."""
-        lo = to_ik([JOINTS[i]['min_angle'] for i in range(NUM_JOINTS)])
-        hi = to_ik([JOINTS[i]['max_angle'] for i in range(NUM_JOINTS)])
+        # ik_limits keeps each pair ordered; a joint with direction -1 maps
+        # its servo minimum to the larger IK value, and an inverted range
+        # rejects every pose.
+        _lim = ik_limits()
+        lo = [p[0] for p in _lim]
+        hi = [p[1] for p in _lim]
 
         r0 = math.hypot(sx, sy)
         if r0 < 1e-4:
@@ -260,6 +266,7 @@ class ArmScannerNode(Node):
                 theta2_min=lo[1], theta2_max=hi[1],
                 theta3_min=lo[2], theta3_max=hi[2],
                 theta4_min=lo[3], theta4_max=hi[3],
+                theta1_min=lo[0], theta1_max=hi[0],
             )
             if result is None:
                 continue

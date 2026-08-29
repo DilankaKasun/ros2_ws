@@ -12,7 +12,9 @@ JOINTS = [
         'min_angle': 0,
         'max_angle': 220,
         'servo_range': 270,   # DS 3218
-        'angle_offset': 95,   # servo angle that points the arm straight ahead
+        'angle_offset': -85,  # base servo 95 = straight ahead (+x). 95-180, so
+                              # the arm's working side reads as positive x
+                              # rather than reaching backwards into -x.
         'pulse_min': 150,
         'pulse_max': 600,
         'speed': 1,
@@ -26,7 +28,7 @@ JOINTS = [
         'min_angle': 0,
         'max_angle': 125,
         'servo_range': 180,   # TD 8130MG
-        'angle_offset': 0,    # UNVERIFIED — measure against the physical arm
+        'angle_offset': -98,    # measured: lower link sits 38 deg above the floor at home
         'pulse_min': 150,
         'pulse_max': 600,
         'speed': 1,
@@ -40,7 +42,7 @@ JOINTS = [
         'min_angle': 0,
         'max_angle': 180,
         'servo_range': 180,   # TD 8130MG
-        'angle_offset': 0,    # UNVERIFIED — measure against the physical arm
+        'angle_offset': 67,     # measured: 67 deg interior angle at the elbow at home
         'pulse_min': 150,
         'pulse_max': 600,
         'speed': 1,
@@ -54,7 +56,7 @@ JOINTS = [
         'min_angle': 0,
         'max_angle': 180,     # Wrist max angle set to 180 deg
         'servo_range': 180,   # MG 996R
-        'angle_offset': 0,    # Zero offset for 0..180 deg wrist travel
+        'angle_offset': -39,    # measured: 116 deg interior angle at the wrist at home
         'pulse_min': 150,
         'pulse_max': 600,
         'speed': 1,

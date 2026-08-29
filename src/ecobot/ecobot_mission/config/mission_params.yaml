@@ -24,9 +24,9 @@ plant_mission_node:
     fallback_target_classes: ['potted plant', 'plant', 'pot', 'crop', 'leaf', 'tree', 'flower', 'vegetable']
 
     # -- arm scan handoff --
-    arm_scan_x: 0.35
+    arm_scan_x: 0.30
     arm_scan_y: 0.0
-    arm_scan_z: 0.18
+    arm_scan_z: 0.50
 
     # -- capture timing --
     capture_delay_s: 1.2

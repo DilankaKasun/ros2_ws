@@ -571,6 +571,7 @@ class ArmScannerNode(Node):
 
         if not self._scan_queue:
             self.get_logger().warn('Empty scan path')
+            self._pub_status('failed', reason='scan path came out empty')
             return
 
         # Validate reachability of the whole path up front; keep only the
@@ -588,9 +589,14 @@ class ArmScannerNode(Node):
                 continue
             kept.append((label, sx, sy, h, ax, ay, az, angles, aim_err))
         if not kept:
-            self.get_logger().warn(
-                'No waypoint in the scan path is reachable — increase '
-                'plant distance or relax joint limits')
+            reason = (
+                f'none of the {skipped} sampled viewpoints around '
+                f'({x:.2f}, {y:.2f}, {z:.2f}) can be posed — the target is '
+                f'likely outside the arm\'s workspace')
+            self.get_logger().warn(f'Scan aborted: {reason}')
+            # Say so, rather than falling silent and leaving the caller
+            # waiting on a scan that will never start.
+            self._pub_status('failed', reason=reason)
             return
         if skipped:
             self.get_logger().warn(
@@ -969,17 +975,22 @@ class ArmScannerNode(Node):
         self._move_to_viewpoint(vp_idx)
         self._dwell_start = now
 
-    def _pub_status(self, status, viewpoint=0):
+    def _pub_status(self, status, viewpoint=0, reason=''):
+        label = (
+            self._scan_queue[viewpoint][0]
+            if self._scan_queue and viewpoint < len(self._scan_queue)
+            else ''
+        )
         msg = String()
         msg.data = json.dumps({
             'status': status,
+            'reason': reason,
             'viewpoint': viewpoint,
             'total_viewpoints': len(self._scan_queue),
-            'current_label': (
-                self._scan_queue[viewpoint][0]
-                if self._scan_queue and viewpoint < len(self._scan_queue)
-                else ''
-            ),
+            # Sampled viewpoints are labelled vNN_...; the start pose and the
+            # transition steps are travel, not shots worth keeping.
+            'capture': label.startswith('v') and label[1:3].isdigit(),
+            'current_label': label,
             'parts_covered': list(self._parts_covered),
         })
         self._scanner_status_pub.publish(msg)

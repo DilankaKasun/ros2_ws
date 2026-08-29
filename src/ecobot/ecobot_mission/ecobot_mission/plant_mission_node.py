@@ -65,9 +65,13 @@ class PlantMissionNode(Node):
             'fallback_target_classes',
             ['potted plant', 'plant', 'pot', 'crop'])
 
-        self.declare_parameter('arm_scan_x', 0.3)
+        # Where to aim when scanning in place with no detected plant pose.
+        # These sit inside the arm's workspace: the shoulder pivot is 38cm up
+        # with a 35cm reach, so the old 0.18 target was unreachable and every
+        # sampled viewpoint got filtered out, leaving a scan that never ran.
+        self.declare_parameter('arm_scan_x', 0.30)
         self.declare_parameter('arm_scan_y', 0.0)
-        self.declare_parameter('arm_scan_z', 0.15)
+        self.declare_parameter('arm_scan_z', 0.50)
         # Photos per plant. The dashboard can change this between runs by
         # putting a 'samples' field on any /ecobot/plant_scan_cmd message.
         self.declare_parameter('scan_samples', 6)
@@ -94,6 +98,7 @@ class PlantMissionNode(Node):
         self._arm_scan_y = float(gp('arm_scan_y').value)
         self._arm_scan_z = float(gp('arm_scan_z').value)
         self._scan_samples = int(gp('scan_samples').value)
+        self._paused_from = None
         self._capture_delay_s = float(gp('capture_delay_s').value)
         self._frame_max_age_s = float(gp('frame_max_age_s').value)
         self._scan_settle_timeout_s = float(gp('scan_settle_timeout_s').value)
@@ -202,6 +207,10 @@ class PlantMissionNode(Node):
                 self._advance_and_navigate()
         elif action == 'stop':
             self._handle_stop()
+        elif action == 'pause':
+            self._handle_pause()
+        elif action == 'resume':
+            self._handle_resume()
         elif action == 'set_waypoints':
             self._handle_set_waypoints(data.get('waypoints', []))
         elif action == 'scan_here':
@@ -281,6 +290,37 @@ class PlantMissionNode(Node):
         self._current_result = None
         self._status = 'STOPPED'
         self._publish_status()
+
+    def _handle_pause(self):
+        """Halt the arm where it is and hold, keeping what has been captured.
+
+        Unlike stop, the captures and the waypoint position survive, so
+        resume picks the plant back up rather than starting the run over.
+        """
+        if self._status not in _ACTIVE_STATUSES:
+            self.get_logger().warning(
+                f'ignoring pause: mission is {self._status}')
+            return
+        self._paused_from = self._status
+        # Bump the epoch so any scan callback still in flight is discarded.
+        self._epoch += 1
+        self._scanner_cmd_pub.publish(String(data=json.dumps({'action': 'stop'})))
+        self._nav_settle_due_time = None
+        self._capture_due_time = None
+        self._pending_capture_label = None
+        self._status = 'PAUSED'
+        self.get_logger().info(
+            f'paused ({len(self._current_captures)} captures held)')
+        self._publish_status()
+
+    def _handle_resume(self):
+        """Carry on from a pause by rescanning the plant we were on."""
+        if self._status != 'PAUSED':
+            self.get_logger().warning(
+                f'ignoring resume: mission is {self._status}')
+            return
+        self.get_logger().info('resuming — rescanning the current plant')
+        self._start_arm_scan()
 
     def _normalize_waypoints(self, waypoints):
         out = []
@@ -471,7 +511,12 @@ class PlantMissionNode(Node):
             return
 
         if data.get('status') == 'scanning':
-            if (prev is None or prev.get('status') != 'scanning'
+            # Only photograph the sampled viewpoints. Older scanners did not
+            # send this flag, so treat its absence as "capture", keeping the
+            # previous behaviour rather than silently taking no photos.
+            wants_capture = data.get('capture', True)
+            if wants_capture and (
+                    prev is None or prev.get('status') != 'scanning'
                     or prev.get('viewpoint') != data.get('viewpoint')):
                 self._pending_capture_label = data.get('current_label', '')
                 self._capture_due_time = (

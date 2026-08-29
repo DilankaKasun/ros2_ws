@@ -57,6 +57,10 @@ DEFAULT_READABLE = {
     '/arm/status': 0.25,
     '/arm/pose_goal_result': 0.05,
     '/arm/scanner_status': 0.25,
+    '/ecobot/plant_scan_status': 0.25,
+    # Scan photos. Each is a whole JPEG as hex, so this is by far the
+    # heaviest topic here; it only ticks while a scan is running.
+    '/ecobot/scan_capture': 0.05,
     '/ecobot/hardware_status': 1.00,
     '/ecobot/detections': 0.25,
     '/ecobot/tof_ranges': 0.20,

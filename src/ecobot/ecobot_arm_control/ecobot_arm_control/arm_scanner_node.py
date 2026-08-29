@@ -10,6 +10,7 @@ import os
 import math
 import json
 import time
+import random
 import numpy as np
 
 from .arm_kinematics import ArmKinematics
@@ -47,6 +48,13 @@ class ArmScannerNode(Node):
         self.declare_parameter('sweep_bottom_offset', -0.15)
         self.declare_parameter('sweep_steps', 8)
         self.declare_parameter('orbit_angles', [0.0])   # deg relative to approach
+        # Sampled arc scan. elevation is measured above the plant's centre:
+        # the arc runs from looking down on it to level with it.
+        self.declare_parameter('scan_samples', 6)
+        self.declare_parameter('arc_elev_min', 0.0)
+        self.declare_parameter('arc_elev_max', 75.0)
+        # Fallback box width when the detector does not report one.
+        self.declare_parameter('plant_width', 0.30)
         self.declare_parameter('aim_height', 'center')  # 'center' | 'path'
         self.declare_parameter('dwell_time', 1.2)
         self.declare_parameter('l0', 0.300)
@@ -88,6 +96,10 @@ class ArmScannerNode(Node):
         self._sweep_steps = int(self.get_parameter('sweep_steps').value)
         self._orbit_angles = [
             float(a) for a in self.get_parameter('orbit_angles').value]
+        self._scan_samples = int(self.get_parameter('scan_samples').value)
+        self._arc_elev_min = float(self.get_parameter('arc_elev_min').value)
+        self._arc_elev_max = float(self.get_parameter('arc_elev_max').value)
+        self._plant_width = float(self.get_parameter('plant_width').value)
         self._aim_height = str(self.get_parameter('aim_height').value).strip().lower()
         self._dwell_time = float(self.get_parameter('dwell_time').value)
         self._enable_detection_auto_scan = bool(
@@ -163,8 +175,9 @@ class ArmScannerNode(Node):
         self._home_angles = [float(j['home_angle']) for j in JOINTS]
         self.get_logger().info(
             f'Arm scanner ready — standoff={self._standoff}m '
-            f'sweep=[{self._sweep_top},{self._sweep_bottom}] '
-            f'steps={self._sweep_steps} orbit={self._orbit_angles}')
+            f'samples={self._scan_samples} '
+            f'arc=[{self._arc_elev_min},{self._arc_elev_max}]deg '
+            f'box_width={self._plant_width}m')
 
     def _scanner_cmd_cb(self, msg):
         try:
@@ -180,7 +193,18 @@ class ArmScannerNode(Node):
             plant_height = data.get('plant_height') or data.get('height')
             z_top = data.get('z_top')
             z_bottom = data.get('z_bottom')
-            self._start_scan(x, y, z, plant_type=plant_type, plant_height=plant_height, z_top=z_top, z_bottom=z_bottom)
+            plant_width = data.get('plant_width') or data.get('width')
+            # Let the caller pick how many shots this run takes, so the count
+            # can be tuned from the dashboard without restarting the node.
+            samples = data.get('samples')
+            if samples:
+                try:
+                    self._scan_samples = max(1, min(int(samples), 40))
+                except (TypeError, ValueError):
+                    self.get_logger().warn(f'ignoring bad samples value: {samples!r}')
+            self._start_scan(x, y, z, plant_type=plant_type,
+                             plant_height=plant_height, z_top=z_top,
+                             z_bottom=z_bottom, plant_width=plant_width)
         elif action == 'stop':
             self._stop_scan()
         elif action == 'home':
@@ -400,7 +424,7 @@ class ArmScannerNode(Node):
         self.get_logger().info(f'[Lock-On] Locked plant center: bearing={bearing_corrected:.1f}° (was {assumed_bearing:.1f}°), height={z_corrected:.2f}m (was {z:.2f}m)')
         return bearing_corrected, z_corrected
 
-    def _start_scan(self, x, y, z, plant_type='potted plant', plant_height=None, z_top=None, z_bottom=None):
+    def _start_scan(self, x, y, z, plant_type='potted plant', plant_height=None, z_top=None, z_bottom=None, plant_width=None):
         if self._scanning:
             return
 
@@ -415,7 +439,7 @@ class ArmScannerNode(Node):
 
         import sys
         if 'pytest' in sys.modules or 'unittest' in sys.modules:
-            self._execute_scan_sequence(x, y, z, plant_type, plant_height, z_top, z_bottom)
+            self._execute_scan_sequence(x, y, z, plant_type, plant_height, z_top, z_bottom, plant_width)
             return
 
         import threading
@@ -426,7 +450,7 @@ class ArmScannerNode(Node):
             daemon=True
         ).start()
 
-    def _execute_scan_sequence(self, x, y, z, plant_type='potted plant', plant_height=None, z_top=None, z_bottom=None):
+    def _execute_scan_sequence(self, x, y, z, plant_type='potted plant', plant_height=None, z_top=None, z_bottom=None, plant_width=None):
         self._parts_covered.clear()
 
         # Perform visual servoing to lock camera onto plant center
@@ -490,44 +514,60 @@ class ArmScannerNode(Node):
                     f'[Initial Vision Guidance] Identified plant direction from Wrist Camera (Part: {part.upper()}, Ratio: {green_ratio*100:.1f}%)! '
                     'Guiding arm motion to lock onto target structure.')
 
-        # 4. Multi-Directional Balance Mandate: Enforce symmetric orbit passes
-        # Ensures equal coverage across Left (-35°), Front (0°), and Right (+35°) to prevent one-sided bias.
-        orbit_passes = self._orbit_angles
-        if len(orbit_passes) == 1:
-            orbit_passes = [-35.0, 0.0, 35.0]
+        # Viewpoints are sampled rather than gridded. The camera rides an arc
+        # at a fixed standoff from the plant, from high above it down to level
+        # with it, and aims at a point picked at random inside the detected
+        # bounding box. Sampling the arc and the box independently gives the
+        # model a varied set of angles and framings from a handful of shots,
+        # where a fixed grid kept returning near-duplicate views.
+        n = max(1, int(self._scan_samples))
+        seed = int(time.time() * 1000) & 0xFFFF
+        rng = random.Random(seed)
+
+        half_w = max(0.02, (plant_width if plant_width else self._plant_width) / 2.0)
+        # Half-angle the box subtends from the camera's standoff distance.
+        az_span = math.degrees(math.atan2(half_w, max(0.05, self._standoff)))
 
         self.get_logger().info(
-            f'[Multi-Directional Balance] Enforcing symmetric orbit scanning passes: '
-            f'{[f"{a:+.0f}°" for a in orbit_passes]} around approach bearing ({base_bearing:.1f}°) '
-            'preventing single-sided scan bias.')
+            f'[Scan Path] {n} sampled viewpoints on a {self._arc_elev_min:.0f}..'
+            f'{self._arc_elev_max:.0f} deg arc at {self._standoff * 100:.0f}cm '
+            f'standoff, aiming inside a {half_w * 200:.0f}cm-wide box '
+            f'(bearing {base_bearing:.1f} deg, seed {seed})')
 
-        # Orbit passes rotate the standoff bearing around the plant symmetrically.
-        for ang in orbit_passes:
-            bearing = base_bearing + ang
+        for i in range(n):
+            # Position on the arc: elevation above the plant's centre, with a
+            # little bearing jitter so repeated runs do not retrace one line.
+            elev = rng.uniform(self._arc_elev_min, self._arc_elev_max)
+            bearing = base_bearing + rng.uniform(-az_span, az_span)
             rad = math.radians(bearing)
-            side_tag = "left" if ang < 0 else ("right" if ang > 0 else "front")
-            for h in heights:
-                sx = (r - self._standoff) * math.cos(rad)
-                sy = (r - self._standoff) * math.sin(rad)
-                
-                # Classify plant anatomical section & optimize camera angle for image quality
-                rel_frac = (h - bot) / max(1e-3, (top - bot))
-                if rel_frac >= 0.75:
-                    feature_label = 'top_leaves_branches'
-                    az = h - 0.03  # Slightly downward pitch to frame top branches & leaves
-                elif rel_frac >= 0.45:
-                    feature_label = 'mid_leaves_foliage'
-                    az = h         # Flat-on horizontal view for dense leaf surface detail
-                elif rel_frac >= 0.18:
-                    feature_label = 'lower_stem_branches'
-                    az = h         # Flat-on view for main stem and lower branching structure
-                else:
-                    feature_label = 'base_roots_pot'
-                    az = max(0.01, h - 0.02)  # Slight downward angle to frame pot rim & soil/root collar
+            er = math.radians(elev)
 
-                label = f'{side_tag}{ang:+.0f}deg_{feature_label}_h{h*1000:.0f}'
-                self._scan_queue.append(
-                    (label, sx, sy, h, x, y, az))
+            # Stand off along the arc: back off horizontally by the standoff's
+            # horizontal component and rise by its vertical one.
+            horiz = self._standoff * math.cos(er)
+            cam_h = z + self._standoff * math.sin(er)
+            sx = (r - horiz) * math.cos(rad)
+            sy = (r - horiz) * math.sin(rad)
+
+            # Aim at a random point inside the box, not always its centre.
+            aim_h = rng.uniform(bot, top)
+            lateral = rng.uniform(-half_w, half_w)
+            # Offset perpendicular to the approach bearing stays inside the box.
+            ax = x - lateral * math.sin(math.radians(base_bearing))
+            ay = y + lateral * math.cos(math.radians(base_bearing))
+
+            rel_frac = (aim_h - bot) / max(1e-3, (top - bot))
+            if rel_frac >= 0.75:
+                feature = 'top_leaves'
+            elif rel_frac >= 0.45:
+                feature = 'mid_foliage'
+            elif rel_frac >= 0.18:
+                feature = 'lower_stem'
+            else:
+                feature = 'base_pot'
+
+            label = f'v{i + 1:02d}_{feature}_elev{elev:+.0f}_h{aim_h * 1000:.0f}'
+            self._scan_queue.append((label, sx, sy, cam_h, ax, ay, aim_h))
 
         if not self._scan_queue:
             self.get_logger().warn('Empty scan path')

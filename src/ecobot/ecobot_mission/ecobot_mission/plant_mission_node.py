@@ -68,6 +68,9 @@ class PlantMissionNode(Node):
         self.declare_parameter('arm_scan_x', 0.3)
         self.declare_parameter('arm_scan_y', 0.0)
         self.declare_parameter('arm_scan_z', 0.15)
+        # Photos per plant. The dashboard can change this between runs by
+        # putting a 'samples' field on any /ecobot/plant_scan_cmd message.
+        self.declare_parameter('scan_samples', 6)
 
         self.declare_parameter('capture_delay_s', 1.4)
         self.declare_parameter('frame_max_age_s', 2.0)
@@ -90,6 +93,7 @@ class PlantMissionNode(Node):
         self._arm_scan_x = float(gp('arm_scan_x').value)
         self._arm_scan_y = float(gp('arm_scan_y').value)
         self._arm_scan_z = float(gp('arm_scan_z').value)
+        self._scan_samples = int(gp('scan_samples').value)
         self._capture_delay_s = float(gp('capture_delay_s').value)
         self._frame_max_age_s = float(gp('frame_max_age_s').value)
         self._scan_settle_timeout_s = float(gp('scan_settle_timeout_s').value)
@@ -177,6 +181,20 @@ class PlantMissionNode(Node):
         except Exception:
             return
         action = data.get('action')
+
+        # Any command may carry the shot count for the next scan.
+        if data.get('samples') is not None:
+            try:
+                self._scan_samples = max(1, min(int(data['samples']), 40))
+                self.get_logger().info(
+                    f'scan sample count set to {self._scan_samples}')
+            except (TypeError, ValueError):
+                self.get_logger().warning(
+                    f'ignoring bad samples value: {data["samples"]!r}')
+
+        if action == 'set_samples':
+            self._publish_status()
+            return
         if action == 'start':
             self._handle_start(data.get('waypoints', []))
         elif action == 'next':
@@ -437,7 +455,8 @@ class PlantMissionNode(Node):
         self._scanner_cmd_pub.publish(String(data=json.dumps({'action': 'stop'})))
         self._scanner_cmd_pub.publish(String(data=json.dumps({
             'action': 'scan', 'x': self._arm_scan_x,
-            'y': self._arm_scan_y, 'z': self._arm_scan_z})))
+            'y': self._arm_scan_y, 'z': self._arm_scan_z,
+            'samples': self._scan_samples})))
         self._status = 'SCANNING'
         self._publish_status()
 
@@ -490,7 +509,9 @@ class PlantMissionNode(Node):
         def _worker():
             labels = [label for label, _ in captures]
             images = [jpg for _, jpg in captures]
-            result = self._gemini.assess_plant_live(images, labels=labels)
+            # The Live streaming API only serves *-live-preview models; the
+            # report runs on a pro model, so use the standard call.
+            result = self._gemini.assess_plant(images, labels=labels)
             with self._result_lock:
                 self._pending_gemini_result = (epoch, idx, result)
 
@@ -535,6 +556,8 @@ class PlantMissionNode(Node):
             'total': len(self._waypoints),
             'results': self._results,
             'waypoints': [{'x': wp['x'], 'y': wp['y']} for wp in self._waypoints],
+            'samples': self._scan_samples,
+            'captures': len(self._current_captures),
         }
         if self._error_msg:
             payload['error'] = self._error_msg

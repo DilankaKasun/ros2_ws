@@ -43,12 +43,18 @@ _JSON_OBJECT_RE = re.compile(r'\{.*\}', re.DOTALL)
 
 class GeminiClient:
     def __init__(self, api_key=None, model=None, timeout_s=20.0, max_retries=1):
-        api_key = api_key or os.environ.get('GOOGLE_API_KEY')
+        # GEMINI_API_KEY is the name the dashboard already uses; GOOGLE_API_KEY
+        # is accepted too so existing setups keep working.
+        api_key = (api_key
+                   or os.environ.get('GEMINI_API_KEY')
+                   or os.environ.get('GOOGLE_API_KEY'))
         if not api_key:
-            raise RuntimeError('GOOGLE_API_KEY not set (env or .env)')
+            raise RuntimeError(
+                'GEMINI_API_KEY not set. Put it in '
+                'ecobot_bringup/.env (see .env.example).')
         self._client = genai.Client(api_key=api_key)
         self._model = model or os.environ.get(
-            'ECOBOT_MISSION_GEMINI_MODEL', 'gemini-3.1-flash-live-preview')
+            'ECOBOT_MISSION_GEMINI_MODEL', 'gemini-3.1-pro-preview')
         self._timeout_s = timeout_s
         self._max_retries = max_retries
 

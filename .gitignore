@@ -1,3 +1,7 @@
 build/
 install/
 log/
+# Secrets: API keys for LiveKit, Gemini and friends live here.
+.env
+**/.env
+!.env.example

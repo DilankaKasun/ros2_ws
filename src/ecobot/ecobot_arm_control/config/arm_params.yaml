@@ -13,7 +13,16 @@ arm_scanner_node:
     sweep_bottom_offset: -0.18
     sweep_steps: 8
 
-    # Multi-angle orbit passes: -35° (left foliage), 0° (front stem), +35° (right foliage)
+    # Sampled arc scan. The camera rides an arc at a fixed standoff from the
+    # plant, from level with it (0 deg) up to looking down on it (75 deg), and
+    # aims at a point picked at random inside the detected box. The dashboard
+    # can override scan_samples per run.
+    scan_samples: 6
+    arc_elev_min: 0.0
+    arc_elev_max: 75.0
+    plant_width: 0.30
+
+    # Kept for the older orbit path; unused by the sampled scan.
     orbit_angles: [-35.0, 0.0, 35.0]
 
     # Wrist Camera Lock-On Centering Parameters

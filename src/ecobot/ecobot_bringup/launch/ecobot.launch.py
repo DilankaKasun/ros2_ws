@@ -34,6 +34,10 @@ def generate_launch_description():
         get_package_share_directory('ecobot_arm_control'),
         'launch', 'arm_control.launch.py')
 
+    mission_launch = os.path.join(
+        get_package_share_directory('ecobot_mission'),
+        'launch', 'mission.launch.py')
+
     nav_share = get_package_share_directory('ecobot_navigation')
     default_map = os.path.join(nav_share, 'maps', 'default_map.yaml')
 
@@ -107,6 +111,14 @@ def generate_launch_description():
             }.items(),
             condition=IfCondition(
                 LaunchConfiguration('enable_arm', default='true')),
+        ),
+        # plant_mission_node drives the scan-and-report pipeline. It was
+        # never included here, so the dashboard's scan commands went to a
+        # topic nothing was listening on and nothing happened.
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(mission_launch),
+            condition=IfCondition(
+                LaunchConfiguration('enable_mission', default='true')),
         ),
         Node(
             package='robot_state_publisher',

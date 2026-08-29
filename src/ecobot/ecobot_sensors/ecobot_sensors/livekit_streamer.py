@@ -126,6 +126,7 @@ class LiveKitStreamerNode(Node):
                     room=self._room_name,
                     can_publish=True,
                     can_subscribe=True,
+                    can_publish_data=True,
                 )
             )
             .to_jwt()

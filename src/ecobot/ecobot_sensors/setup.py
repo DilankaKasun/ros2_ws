@@ -36,6 +36,7 @@ setup(
             'tof_sensors = ecobot_sensors.tof_sensors:main',
             'scan_filter_node = ecobot_sensors.scan_filter_node:main',
             'livekit_streamer = ecobot_sensors.livekit_streamer:main',
+            'livekit_bridge = ecobot_sensors.livekit_bridge:main',
         ],
     },
 )

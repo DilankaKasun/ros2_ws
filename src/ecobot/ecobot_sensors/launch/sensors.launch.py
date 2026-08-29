@@ -75,6 +75,16 @@ def generate_launch_description():
                 LaunchConfiguration('enable_livekit')),
             output='screen',
         ),
+        # Carries control and telemetry over the same LiveKit room the video
+        # uses, so a remote dashboard needs no inbound path to the robot.
+        Node(
+            package='ecobot_sensors',
+            executable='livekit_bridge',
+            name='livekit_bridge',
+            condition=IfCondition(
+                LaunchConfiguration('enable_livekit')),
+            output='screen',
+        ),
         Node(
             package='ecobot_sensors',
             executable='obstacle_avoidance',

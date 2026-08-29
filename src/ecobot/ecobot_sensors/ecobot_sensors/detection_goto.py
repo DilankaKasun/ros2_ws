@@ -31,7 +31,10 @@ class DetectionGoto(Node):
         # camera, unaffected by this) covers the remaining gap during its
         # scan. This may still need empirical tuning per-unit — override
         # with --ros-args -p stop_distance:=0.xx without a rebuild.
-        self.declare_parameter('stop_distance', 0.38)
+        # Nearest depth the camera can actually return; anything closer reads
+        # as invalid and makes the target effectively invisible.
+        self.declare_parameter('min_depth_range', 0.55)
+        self.declare_parameter('stop_distance', 0.65)
         self.declare_parameter('wp_stop_distance', 0.15)
         self.declare_parameter('max_linear', 0.35)
         self.declare_parameter('max_angular', 1.2)
@@ -40,7 +43,7 @@ class DetectionGoto(Node):
         self.declare_parameter('align_threshold', 0.35)
         # How centered the object must be (bearing angle in rad) before a
         # stop is allowed — the robot parks facing the object centrally.
-        self.declare_parameter('stop_align_threshold', 0.025)
+        self.declare_parameter('stop_align_threshold', 0.09)
         # Within this depth (m) the approach starts trading forward speed
         # for heading alignment so it arrives dead-ahead of the plant.
         self.declare_parameter('final_align_dist', 1.0)
@@ -121,9 +124,18 @@ class DetectionGoto(Node):
         status_topic = str(self.get_parameter('status_topic').value)
         self.waypoints_topic = str(self.get_parameter('waypoints_topic').value)
         odom_topic = str(self.get_parameter('odom_topic').value)
+        self.min_depth_range = float(
+            self.get_parameter('min_depth_range').value)
         self.stop_distance = float(self.get_parameter('stop_distance').value)
-        # Enforce that the stop distance is strictly within the 35cm to 40cm range
-        self.stop_distance = max(0.35, min(self.stop_distance, 0.40))
+        # The depth camera cannot measure closer than about 0.5m — its nearest
+        # valid reading on this robot is 0.50m. Stopping inside that blind zone
+        # is impossible to detect: the plant's depth goes invalid on the final
+        # approach, the tracker drops the detection for want of a z, and the
+        # robot decides it has lost the target and rotates to search instead of
+        # arriving. Keep the stop distance far enough out that the plant stays
+        # measurable all the way in.
+        self.stop_distance = max(self.min_depth_range + 0.1,
+                                 min(self.stop_distance, 1.5))
         self.wp_stop_distance = float(
             self.get_parameter('wp_stop_distance').value)
         self.max_linear = float(self.get_parameter('max_linear').value)

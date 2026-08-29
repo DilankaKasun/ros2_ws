@@ -38,7 +38,8 @@ from .gemini_client import GeminiClient
 
 # Statuses a mission is actively running in — used to reject start/
 # set_waypoints commands that would otherwise clobber an in-progress run.
-_ACTIVE_STATUSES = {'NAVIGATING', 'SCANNING', 'ANALYZING', 'WAITING'}
+_ACTIVE_STATUSES = {'NAVIGATING', 'SCANNING', 'ANALYZING', 'WAITING',
+                    'SEARCHING'}
 
 
 class PlantMissionNode(Node):
@@ -152,6 +153,11 @@ class PlantMissionNode(Node):
             String, str(gp('scanner_cmd_topic').value), 10)
         self._status_pub = self.create_publisher(
             String, str(gp('plant_scan_status_topic').value), 10)
+        # Hands the search-and-approach back to detection_goto, which owns
+        # the drive toward whatever plant it finds.
+        self._goto_cmd_pub = self.create_publisher(
+            String, '/ecobot/goto_target', 10)
+
         self._scan_capture_pub = self.create_publisher(
             String, str(gp('scan_capture_topic').value), 10)
 
@@ -247,14 +253,21 @@ class PlantMissionNode(Node):
         if not wps:
             wps = list(self._fallback_waypoints)
         if not wps:
-            # Reset state before reporting ERROR — otherwise a stale
-            # waypoints/results/idx from a previous completed mission
-            # would leak into this fresh error status.
-            self._waypoints = []
+            # No route given is the normal case for this robot: it is meant to
+            # look around, drive to whatever plant it finds, and scan it.
+            # Reporting ERROR here made the ordinary way of starting a mission
+            # look broken. Hand off to detection_goto's search-and-approach
+            # instead, which calls back with scan_here once it arrives.
             self._results = []
-            self._idx = -1
-            self._status = 'ERROR'
-            self._error_msg = 'no waypoints provided and /ecobot/waypoints is empty'
+            self._idx = 0
+            self._waypoints = [{'x': 0.0, 'y': 0.0, 'frame': None}]
+            self._error_msg = ''
+            self._epoch += 1
+            self._goto_cmd_pub.publish(String(data=json.dumps(
+                {'action': 'resume_auto_track'})))
+            self._status = 'SEARCHING'
+            self.get_logger().info(
+                'no waypoints given — searching for a plant to scan')
             self._publish_status()
             return
         self._waypoints = wps

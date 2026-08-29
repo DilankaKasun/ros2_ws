@@ -180,7 +180,10 @@ def generate_launch_description():
             condition=IfCondition(
                 LaunchConfiguration('enable_detection')),
             parameters=[{
-                'stop_distance': 0.4,
+                # Must stay clear of the depth camera's near limit — its
+                # nearest valid reading here is 0.50m, and stopping inside
+                # that makes the plant unmeasurable on the final approach.
+                'stop_distance': 0.65,
                 'max_linear': 0.25,
                 'max_angular': 0.8,
                 'search_timeout': 20.0,

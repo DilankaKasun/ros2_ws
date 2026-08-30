@@ -375,17 +375,24 @@ class ObstacleAvoidance(Node):
         # look round, the robot twitched left, right, left on the spot and
         # never saw past its own start. Forward motion stays fully guarded
         # below; only pure rotation is let through.
-        rotating_in_place = (
-            cmd_source_active
-            and abs(base_cmd.linear.x) < 0.01
-            and abs(base_cmd.angular.z) > 1e-3)
+        # This also covers a driver asking to STAND STILL. A stationary
+        # robot has nothing to escape from, but the escape manoeuvre below
+        # did not look at the command at all: boxed into a corner it would
+        # reverse at 0.2m/s and spin at full rate while the driver was
+        # asking for zero, so a robot told to hold still drove itself
+        # around instead.
+        holding_or_turning = (
+            cmd_source_active and abs(base_cmd.linear.x) < 0.01)
 
-        if rotating_in_place:
+        if holding_or_turning:
             self._danger_active = False
             self.escape_state = 'NONE'
             self.escape_start_time = None
             self.cmd_pub.publish(base_cmd)
-            self._publish_view(depth_image, zones, w, h, 'ROTATE IN PLACE')
+            self._publish_view(
+                depth_image, zones, w, h,
+                'HOLD STILL' if abs(base_cmd.angular.z) < 1e-3
+                else 'ROTATE IN PLACE')
             return
 
         if not suppress_active and self.escape_state == 'NONE' and all_blocked:

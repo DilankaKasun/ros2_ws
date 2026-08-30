@@ -65,19 +65,26 @@ DEFAULT_READABLE = {
     '/ecobot/detections': 0.25,
     '/ecobot/tof_ranges': 0.20,
     '/odom': 0.10,
-    # Which controller has the wheels, and what it is doing. Without this the
-    # dashboard's node view shows detection_goto as "no data" even while the
-    # node is running and publishing perfectly well on the LAN — the topic
-    # simply never crossed the bridge.
-    '/ecobot/goto_status': 0.25,
-    # What the wheels were actually told to do. Read-only here; the writable
-    # allowlist below is what governs whether a remote client may command it.
+    # The run: which driver has the wheels, what state it is in, why, and
+    # how long before that state times out. The dashboard's whole run view
+    # is built on this, and without it a remote client can START a run —
+    # plant_scan_cmd is writable below — but never see that anything
+    # happened, so the buttons sit dead while the robot drives.
+    '/ecobot/nav_status': 0.25,
+    # What each driver is asking for, and what the wheels were actually
+    # told. The handover is decided by which of these two is still live, so
+    # seeing them side by side is the only way to debug it from a distance.
+    # Read-only here; the writable allowlist below governs commanding.
+    '/goto_cmd_vel': 0.10,
+    '/nav_cmd_vel': 0.10,
     '/cmd_vel': 0.10,
-    # Whether the obstacle-avoidance layer has been asked to stand down. These
-    # decide whether an approach can reach a plant at all, so they are worth
+    # Whether the obstacle-avoidance layer has been asked to stand down. It
+    # decides whether an approach can reach a plant at all, so it is worth
     # seeing from the dashboard when an approach stalls.
     '/ecobot/goto_suppress_avoidance': 0.25,
-    '/ecobot/mission_suppress_avoidance': 0.25,
+    # What the wrist camera can see, so a scan aiming at the wrong thing is
+    # visible remotely rather than only in the robot's own logs.
+    '/arm/detections': 0.25,
 }
 
 # Topics a remote client is allowed to publish to. Anything not listed is

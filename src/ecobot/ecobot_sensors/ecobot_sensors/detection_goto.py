@@ -257,6 +257,12 @@ class DetectionGoto(Node):
         self._scan_done = False
         self._scan_requested = False
         self._scanner_scanning = False
+        # True once the arm has actually been seen sweeping for this request.
+        # Both status sources sit at a terminal/idle value in the gap between
+        # asking for a scan and the arm starting one, so without this the very
+        # first message after the request reads as "already finished" and the
+        # robot drives off while the arm is still working.
+        self._scan_started = False
         # Set right after a plant is reached; while true, _maybe_auto_track
         # requires targets farther than auto_resume_min_dist so it doesn't
         # immediately re-pick the plant parked 0.4m in front. Cleared once
@@ -464,8 +470,11 @@ class DetectionGoto(Node):
         # is still sweeping, so only treat this as scan-done when the
         # scanner also reports idle (see _scanner_status_cb).
         status = str(data.get('status', ''))
+        if status in ('SCANNING', 'ANALYZING', 'ANALYSING', 'NAVIGATING'):
+            self._scan_started = True
+            return
         if status in ('COMPLETE', 'WAITING', 'IDLE', 'STOPPED', 'ERROR'):
-            if self._scanner_scanning:
+            if self._scanner_scanning or not self._scan_started:
                 return
             self._scan_done = True
 
@@ -479,8 +488,19 @@ class DetectionGoto(Node):
         # drive away even if plant_mission_node has moved on.
         status = str(data.get('status', ''))
         self._scanner_scanning = (status == 'scanning')
+        if status == 'scanning':
+            self._scan_started = True
+            return
+        if status == 'failed':
+            # Nothing is going to happen; stop waiting on it.
+            self.get_logger().warn(
+                f'arm scan failed: {data.get("reason", "no reason given")}')
+            self._scan_done = True
+            return
         if status in ('idle', 'recovering'):
-            if self._scan_requested:
+            # Only after the arm has been seen sweeping — this topic reads
+            # idle in the gap before the scan begins as well.
+            if self._scan_requested and self._scan_started:
                 self._scan_done = True
 
     def _trigger_arm_scan(self):
@@ -492,6 +512,7 @@ class DetectionGoto(Node):
         node's own controller already positioned the robot."""
         self._scan_done = False
         self._scan_requested = True
+        self._scan_started = False
         self.plant_scan_cmd_pub.publish(
             String(data=json.dumps({'action': 'scan_here'})))
         self.get_logger().info(

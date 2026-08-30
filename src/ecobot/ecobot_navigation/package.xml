@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>ecobot_navigation</name>
+  <version>0.2.0</version>
+  <description>Plant survey-and-scan run: one node owns the wheels, handing
+  over between the Nav2 map driver and the camera driver.</description>
+  <maintainer email="user@ecobot.local">ecobot</maintainer>
+  <license>MIT</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>action_msgs</exec_depend>
+  <exec_depend>nav2_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>nav2_controller</exec_depend>
+  <exec_depend>nav2_planner</exec_depend>
+  <exec_depend>nav2_behaviors</exec_depend>
+  <exec_depend>nav2_bt_navigator</exec_depend>
+  <exec_depend>nav2_lifecycle_manager</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

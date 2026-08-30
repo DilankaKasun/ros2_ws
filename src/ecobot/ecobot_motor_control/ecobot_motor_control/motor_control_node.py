@@ -45,6 +45,18 @@ class MotorControlNode(Node):
         self.declare_parameter('product_id', 1)
         self.declare_parameter('odom_frame_id', 'odom')
         self.declare_parameter('base_frame_id', 'base_footprint')
+        # The tracks scrub when the robot turns, so the turn the encoders
+        # report is smaller than the turn the robot actually made — about
+        # half of it on this machine. Everything that steers closes its
+        # loop on this odometry, so the error has to be taken out here:
+        # left in, the reported frame is not a rotated version of the real
+        # world but a differently shaped one (drive at an angle and it is
+        # recorded at half that angle), and no planner can work in it.
+        #
+        # MEASURE THIS PER ROBOT. Turn it a known amount by hand — a full
+        # circle back to a floor mark is easiest — and divide the true
+        # turn by what /odom reported. 1.0 means the encoders are right.
+        self.declare_parameter('turn_calibration', 2.0)
 
         self.serial_port_name = self.get_parameter('serial_port').value
         self.baudrate = self.get_parameter('baudrate').value
@@ -54,6 +66,8 @@ class MotorControlNode(Node):
         self.product_id = self.get_parameter('product_id').value
         self.odom_frame = self.get_parameter('odom_frame_id').value
         self.base_frame = self.get_parameter('base_frame_id').value
+        self.turn_calibration = float(
+            self.get_parameter('turn_calibration').value)
 
         self.params = CUGOV4_PARAMS
 
@@ -307,6 +321,8 @@ class MotorControlNode(Node):
 
         linear_x, angular_z = encoder_delta_to_twist(
             diff_l, diff_r, dt, self.params)
+        # Take out the scrubbing error before anything sees this reading.
+        angular_z *= self.turn_calibration
 
         self.pose_yaw += angular_z * dt
         self.pose_x += linear_x * dt * math.cos(self.pose_yaw)

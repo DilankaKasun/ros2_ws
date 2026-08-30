@@ -173,26 +173,7 @@ def generate_launch_description():
             }],
             output='screen',
         ),
-        Node(
-            package='ecobot_sensors',
-            executable='detection_goto',
-            name='detection_goto',
-            condition=IfCondition(
-                LaunchConfiguration('enable_detection')),
-            parameters=[{
-                # Must stay clear of the depth camera's near limit — its
-                # nearest valid reading here is 0.50m, and stopping inside
-                # that makes the plant unmeasurable on the final approach.
-                'stop_distance': 0.65,
-                'max_linear': 0.25,
-                'max_angular': 0.8,
-                'search_timeout': 20.0,
-                'search_speed': 0.25,
-                'avoid_distance': 0.4,
-                'avoid_angle': 1.05,
-                'use_map_frame': False,
-                'blind_approach_limit': 1.0,
-            }],
-            output='screen',
-        ),
+        # detection_goto used to drive here as a second, competing
+        # driver. The wheels now belong to ecobot_navigation's
+        # plant_run_node alone, launched from navigation.launch.py.
     ])

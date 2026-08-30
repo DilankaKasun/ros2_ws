@@ -56,7 +56,12 @@ def generate_launch_description():
                     '" == "true" or "', LaunchConfiguration('enable_navigation', default='false'),
                     '" == "true" or "', LaunchConfiguration('enable_localization', default='false'),
                     '" == "true"']),
-                'enable_detection': LaunchConfiguration('enable_detection', default='false'),
+                # A plant run cannot see a plant without the detector, so
+                # turning navigation on turns it on too.
+                'enable_detection': PythonExpression([
+                    '"', LaunchConfiguration('enable_detection', default='false'),
+                    '" == "true" or "', LaunchConfiguration('enable_navigation', default='false'),
+                    '" == "true"']),
                 'enable_livekit': LaunchConfiguration('enable_livekit', default='true'),
             }.items(),
             condition=IfCondition(

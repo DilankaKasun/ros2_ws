@@ -64,6 +64,14 @@ def generate_launch_description():
             name='behavior_server',
             output='screen',
             parameters=[params_file],
+            # Nav2's recovery behaviours (spin, back up, drive on heading)
+            # publish their own velocities, and without this they go
+            # STRAIGHT to /cmd_vel — past the obstacle layer, and past the
+            # handover, so the robot could spin or reverse unchecked while
+            # this stack believed the map driver had let go. A recovery is
+            # the map driver moving the robot, so it belongs on the map
+            # driver's topic like everything else it does.
+            remappings=[('/cmd_vel', '/nav_cmd_vel')],
         ),
         Node(
             package='nav2_bt_navigator',

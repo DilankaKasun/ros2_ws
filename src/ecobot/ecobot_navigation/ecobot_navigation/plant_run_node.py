@@ -205,6 +205,13 @@ class PlantRunNode(Node):
         # the robot down but can never hang it.
         self.declare_parameter('yaw_scale', 1.0)
         self.declare_parameter('survey_sweep_rad', 2.0 * math.pi)
+        # Stop turning the moment a plant has been seen this many frames
+        # running. The survey is not a mapping exercise — it is a look
+        # round for something to go and do, and standing still spinning
+        # past a plant that is plainly in view is the opposite of that.
+        # Set act_on_sight false to always finish the full sweep first.
+        self.declare_parameter('act_on_sight', True)
+        self.declare_parameter('min_sightings_to_act', 3)
         # Enough of a turn to be facing somewhere new before moving on.
         self.declare_parameter('turn_away_rad', 1.2)
 
@@ -291,6 +298,8 @@ class PlantRunNode(Node):
 
         self._yaw_scale = float(gp('yaw_scale').value)
         self._sweep_target = float(gp('survey_sweep_rad').value)
+        self._act_on_sight = bool(gp('act_on_sight').value)
+        self._min_sightings_to_act = int(gp('min_sightings_to_act').value)
         self._turn_away_rad = float(gp('turn_away_rad').value)
         self._scan_samples = int(gp('scan_samples').value)
         self._hold_still_when_idle = bool(gp('hold_still_when_idle').value)
@@ -316,6 +325,7 @@ class PlantRunNode(Node):
         self._nav_result = None       # 'succeeded' | 'failed' | 'canceled'
         self._nav_cancel_sent = False
         self._nav_missing = False
+        self._nav_goal_sent = False
         self._last_nav_vel_time = 0.0
         self._last_nav_move_time = 0.0
 
@@ -513,28 +523,31 @@ class PlantRunNode(Node):
         return rx + rng * math.cos(angle), ry + rng * math.sin(angle)
 
     def _record_sighting(self, det):
-        """Remember a plant as a direction to come back to. No position is
-        stored: the robot is turning while it surveys, and a position taken
-        mid-turn on this robot is fiction."""
+        """Remember a plant as a direction to come back to, and hand back
+        the candidate it belongs to.
+
+        No position is stored: the robot is turning while it surveys, and
+        a position taken mid-turn on this robot is fiction."""
         bearing, rng = self._bearing_and_range(det)
         if bearing is None or rng > self._max_range:
-            return
+            return None
         pose = self._robot_pose()
         if pose is None:
-            return
+            return None
         heading = _wrap(pose[2] + bearing)
         for plant in self._plants:
             if abs(_wrap(plant.heading - heading)) <= self._merge_heading and \
                     abs(plant.rng - rng) <= self._merge_range:
                 if plant.state == 'pending':
                     plant.merge(heading, rng)
-                return
+                return plant
         self._plants.append(
             Candidate(heading, rng, str(det.get('class_name', 'plant'))))
         self.get_logger().info(
             f'saw a {self._plants[-1].name} {rng:.2f}m away, '
             f'{math.degrees(heading):.0f} degrees round — '
             f'{len(self._plants)} plant(s) found so far')
+        return self._plants[-1]
 
     def _already_handled_near(self, x, y):
         """True when this spot is a plant the robot has already worked on,
@@ -682,9 +695,11 @@ class PlantRunNode(Node):
             self._nav_result = None
             self._nav_goal_handle = None
             self._nav_cancel_sent = False
-            self._enter(state, say)
-            self._send_nav_goal()
-            return
+            # The goal is sent from the tick, not from here. Waiting on the
+            # action server blocks this node, and a blocked node publishes
+            # no velocity — after one second of that, the safety layer
+            # decides nobody is driving and starts moving the robot itself.
+            self._nav_goal_sent = False
         elif state == 'HANDOVER':
             self._cancel_nav_goal()
             self._last_seen_time = 0.0
@@ -785,10 +800,19 @@ class PlantRunNode(Node):
                 self._drive(0.0, 0.0)
                 self._target_xy = pos
                 self._target.rng = rng
-                self._queue('DRIVE',
-                            f'found it again {rng:.2f}m off and '
-                            f'{math.degrees(bearing):+.0f} degrees from '
-                            'straight ahead')
+                found = (f'found it again {rng:.2f}m off and '
+                         f'{math.degrees(bearing):+.0f} degrees from '
+                         'straight ahead')
+                if rng <= self._handover_dist + self._park_tol:
+                    # Already inside the handover ring. There is no room
+                    # left to cross, so asking the map driver for a goal
+                    # here would just be a goal on the spot the robot is
+                    # standing on. The camera takes it straight away.
+                    self._queue('APPROACH',
+                                f'{found} — near enough already, no long '
+                                'drive needed')
+                else:
+                    self._queue('DRIVE', found)
                 return
 
         if abs(turn_err) > self._heading_tol:
@@ -827,13 +851,23 @@ class PlantRunNode(Node):
                 ) * self._yaw_scale
             self._sweep_last_yaw = self._odom_yaw
 
+        seen_now = None
         if (time.time() - self._detections_time) < self._det_max_age:
             for det in self._detections:
-                self._record_sighting(det)
+                hit = self._record_sighting(det)
+                if hit is not None and hit.state == 'pending' and (
+                        seen_now is None
+                        or hit.sightings > seen_now.sightings):
+                    seen_now = hit
 
+        # A plant is in view and has held still enough frames to be real.
+        # Stop turning and go to it — the aiming is REACQUIRE's job, and
+        # it is better at it than a sweep that is already moving past.
+        sighted = (self._act_on_sight and seen_now is not None
+                   and seen_now.sightings >= self._min_sightings_to_act)
         swept = self._sweep_turned >= self._sweep_target
         timed_out = self._deadline_passed()
-        if not (swept or timed_out):
+        if not (sighted or swept or timed_out):
             self._drive(0.0, self._survey_speed)
             self._say = (
                 f'turning to look — {len(self._plants)} plant(s) so far, '
@@ -841,7 +875,13 @@ class PlantRunNode(Node):
             return
 
         self._drive(0.0, 0.0)
-        why = 'a full look round' if swept else 'the look-round time limit'
+        if sighted:
+            why = (f'a {seen_now.name} in view {seen_now.rng:.2f}m off, '
+                   f'held for {seen_now.sightings} frames')
+        elif swept:
+            why = 'a full look round'
+        else:
+            why = 'the look-round time limit'
         pending = sum(1 for p in self._plants if p.state == 'pending')
         if timed_out and not pending and \
                 self._surveys_done >= self._max_surveys:
@@ -874,22 +914,18 @@ class PlantRunNode(Node):
                 math.atan2(uy, ux))
 
     def _send_nav_goal(self):
+        """Try to hand the map driver a goal. Never blocks: returns False
+        if the server is not up yet, and the tick tries again."""
+        if not self._nav_client.server_is_ready():
+            return False
+
         target = self._standoff_pose()
         if target is None:
             self.get_logger().error(
                 'no transform from the wheel frame — cannot plan a drive')
             self._nav_result = 'failed'
-            return
+            return True
         gx, gy, gyaw = target
-
-        if not self._nav_client.wait_for_server(
-                timeout_sec=self._nav_server_wait):
-            self.get_logger().error(
-                'the map driver (Nav2) is not running — it has to be up to '
-                'cross the room')
-            self._nav_missing = True
-            self._nav_result = 'failed'
-            return
 
         goal = NavigateToPose.Goal()
         goal.pose.header.frame_id = self._fixed_frame
@@ -904,6 +940,7 @@ class PlantRunNode(Node):
         self.get_logger().info(
             f'map driver heading for ({gx:.2f}, {gy:.2f}) — '
             f'{self._handover_dist}m short of the plant, never at it')
+        return True
 
     def _on_nav_accepted(self, future):
         try:
@@ -951,6 +988,18 @@ class PlantRunNode(Node):
         # that if Nav2 falls silent the safety layer stops the robot rather
         # than driving it forward on its own.
         self._drive(0.0, 0.0)
+
+        if not self._nav_goal_sent:
+            if self._send_nav_goal():
+                self._nav_goal_sent = True
+            elif self._elapsed() < self._nav_server_wait:
+                self._say = 'waiting for the map driver (Nav2) to answer'
+                return
+            else:
+                self.get_logger().error(
+                    'the map driver (Nav2) is not running — it has to be up '
+                    'to cross the room')
+                self._nav_missing = True
 
         if self._nav_missing:
             self._finish_run(

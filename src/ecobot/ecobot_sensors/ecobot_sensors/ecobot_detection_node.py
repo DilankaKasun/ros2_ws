@@ -106,6 +106,11 @@ class EcobotDetectionNode(Node):
         self.declare_parameter('camera_info_topic', '/camera/depth/camera_info')
         self.declare_parameter('depth_scale', 0.001)
         self.declare_parameter('camera_frame', 'camera_depth_optical_frame')
+        # How high the camera sits above the floor. Used to turn a
+        # detection's vertical position into a height off the floor, which
+        # is what the arm needs to aim at a plant. Must match the
+        # base_footprint -> camera static transform in sensors.launch.py.
+        self.declare_parameter('camera_height', 0.508)
         self.declare_parameter('detections_pointcloud_topic',
                                '/ecobot/detection_points')
 
@@ -124,6 +129,7 @@ class EcobotDetectionNode(Node):
         self.camera_frame = str(self.get_parameter('camera_frame').value)
         pointcloud_topic = str(
             self.get_parameter('detections_pointcloud_topic').value)
+        self.camera_height = float(self.get_parameter('camera_height').value)
 
         if not model_path:
             try:
@@ -161,10 +167,19 @@ class EcobotDetectionNode(Node):
             String, detections_topic, 10)
         self.color_sub = self.create_subscription(
             Image, camera_topic, self.color_cb, 10)
+        # Depth and camera info are optional. Run against the wrist camera
+        # there is neither, and the node is only asked WHETHER something is
+        # in frame and WHERE in the frame — never how far away. An empty
+        # topic name is not a legal subscription, so skip it rather than
+        # crash on startup.
         self.depth_sub = self.create_subscription(
-            Image, depth_topic, self.depth_cb, 10)
+            Image, depth_topic, self.depth_cb, 10) if depth_topic else None
         self.cam_info_sub = self.create_subscription(
-            CameraInfo, camera_info_topic, self.cam_info_cb, 10)
+            CameraInfo, camera_info_topic, self.cam_info_cb, 10) \
+            if camera_info_topic else None
+        if not depth_topic:
+            self.get_logger().info(
+                'no depth topic given — detections will carry no distance')
         self.pc_pub = self.create_publisher(
             PointCloud2, pointcloud_topic, 10)
 
@@ -340,12 +355,26 @@ class EcobotDetectionNode(Node):
                 det['x'] = round(x_3d, 3)
                 det['y'] = round(y_3d, 3)
                 det['z'] = round(z_3d, 3)
-                # Physical height and vertical bounds estimation from 2D bounding box + depth
+                # Physical size from the box and the depth at its centre.
                 bbox_h_px = max(1, abs(y2 - y1))
+                bbox_w_px = max(1, abs(x2 - x1))
                 h_3d = (bbox_h_px * depth_val) / self.fy
+                w_3d = (bbox_w_px * depth_val) / self.fx
                 det['height'] = round(h_3d, 3)
-                det['z_top'] = round(z_3d + h_3d / 2.0, 3)
-                det['z_bottom'] = round(z_3d - h_3d / 2.0, 3)
+                det['width'] = round(w_3d, 3)
+
+                # How high off the floor the object is. In the optical
+                # frame y points DOWN, so subtracting it from the camera's
+                # mounting height gives height above the floor.
+                #
+                # The old z_top/z_bottom added half a HEIGHT to z, the
+                # FORWARD distance — two different axes — so they described
+                # nothing real. The arm aimed with them and swept past the
+                # plant into the ceiling.
+                center_h = self.camera_height - y_3d
+                det['center_height'] = round(center_h, 3)
+                det['top_height'] = round(center_h + h_3d / 2.0, 3)
+                det['bottom_height'] = round(max(0.0, center_h - h_3d / 2.0), 3)
                 det['plant_type'] = det.get('class_name', 'plant')
                 points_3d.append([x_3d, y_3d, z_3d])
 

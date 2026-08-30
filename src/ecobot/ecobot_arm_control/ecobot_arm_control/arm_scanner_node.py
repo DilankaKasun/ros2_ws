@@ -66,6 +66,32 @@ class ArmScannerNode(Node):
         # first raw /ecobot/detections message. Kept for anyone who still
         # wants the old immediate-react behavior.
         self.declare_parameter('enable_detection_auto_scan', False)
+        # The object detector run on the WRIST camera. Colour masking alone
+        # calls a green wall a plant and a beige pot nothing, so where a
+        # real detection is available it decides whether the arm is
+        # actually looking at a plant, and where in the frame it sits.
+        self.declare_parameter('wrist_detections_topic', '/arm/detections')
+        self.declare_parameter('wrist_plant_classes',
+                               ['potted plant', 'plant', 'vase', 'pot'])
+        self.declare_parameter('wrist_detection_conf', 0.35)
+        # A wrist detection older than this is not evidence of anything.
+        self.declare_parameter('wrist_detection_max_age_s', 2.0)
+        # Wrist camera frame size, to turn a detection box into the same
+        # -1..1 centroid the colour analyser reports. Must match
+        # usb_camera_node's width/height.
+        self.declare_parameter('wrist_image_width', 640)
+        self.declare_parameter('wrist_image_height', 480)
+        # How hard to pull the aim back onto a plant the wrist detector can
+        # see off-centre, and how far off-centre is worth correcting.
+        self.declare_parameter('wrist_recentre_gain', 0.6)
+        self.declare_parameter('wrist_recentre_tol', 0.12)
+        self.declare_parameter('wrist_recentre_max_deg', 6.0)
+        # Which way the wrist joint pitches to look further down. The
+        # horizontal correction's sign is fixed by the lock-on geometry,
+        # but this one is not established anywhere in the arm's own code,
+        # so it is a parameter: if the arm corrects the wrong way
+        # vertically, set this to -1.0 and it is fixed with no rebuild.
+        self.declare_parameter('wrist_pitch_sign', 1.0)
         self.declare_parameter('scanning_peak_speed', 15.0)
         self.declare_parameter('scanning_accel', 30.0)
         self.declare_parameter('normal_peak_speed', 40.0)
@@ -123,6 +149,9 @@ class ArmScannerNode(Node):
         # point, and servo_angles the pre-solved aimed joint command.
         self._scan_queue = []
         self._current_viewpoint = 0
+        # Whether the arm has announced that it reached the current
+        # viewpoint and stopped. Photographs wait for this.
+        self._settled_announced = False
         self._scanning = False
         self._dwell_start = None
         self._parts_covered = set()
@@ -145,6 +174,26 @@ class ArmScannerNode(Node):
 
         self._cmd_sub = self.create_subscription(
             String, '/arm/scanner_cmd', self._scanner_cmd_cb, 10)
+
+        self._wrist_plant_classes = {
+            str(c).strip().lower()
+            for c in self.get_parameter('wrist_plant_classes').value}
+        self._wrist_conf = float(self.get_parameter('wrist_detection_conf').value)
+        self._wrist_max_age = float(
+            self.get_parameter('wrist_detection_max_age_s').value)
+        self._wrist_gain = float(self.get_parameter('wrist_recentre_gain').value)
+        self._wrist_tol = float(self.get_parameter('wrist_recentre_tol').value)
+        self._wrist_max_deg = float(
+            self.get_parameter('wrist_recentre_max_deg').value)
+        self._wrist_pitch_sign = float(
+            self.get_parameter('wrist_pitch_sign').value)
+        self._lock_img_w = int(self.get_parameter('wrist_image_width').value)
+        self._lock_img_h = int(self.get_parameter('wrist_image_height').value)
+        self._wrist_plant = None      # newest plant box, or None
+        self._wrist_plant_time = 0.0
+        self.create_subscription(
+            String, str(self.get_parameter('wrist_detections_topic').value),
+            self._wrist_detections_cb, 10)
 
         # Track live joint angles so dwell waits until the arm actually
         # reaches each viewpoint (smooth trajectories take seconds).
@@ -446,7 +495,8 @@ class ArmScannerNode(Node):
         self.get_logger().info('[Thread Dispatcher] Spawning asynchronous background thread for lock-on and plant scanning sequence.')
         threading.Thread(
             target=self._execute_scan_sequence,
-            args=(x, y, z, plant_type, plant_height, z_top, z_bottom),
+            args=(x, y, z, plant_type, plant_height, z_top, z_bottom,
+                  plant_width),
             daemon=True
         ).start()
 
@@ -786,6 +836,9 @@ class ArmScannerNode(Node):
         self._pub_status('idle', 0)
 
     def _move_to_viewpoint(self, vp_idx):
+        # A new move means the arm is travelling again, so it is no longer
+        # settled until it says so.
+        self._settled_announced = False
         if vp_idx >= len(self._scan_queue):
             self.get_logger().info('Scan complete')
             self._stop_scan()
@@ -819,6 +872,66 @@ class ArmScannerNode(Node):
             if abs(a - c) > tol:
                 return False
         return True
+
+    def _wrist_detections_cb(self, msg):
+        """Whether the wrist camera is actually looking at a plant.
+
+        Keeps the most central plant-class box, in image coordinates
+        normalised to -1..1, which is the same shape the colour analyser
+        reports its centroid in — so the aiming correction below can use
+        either without caring which it got.
+        """
+        try:
+            dets = json.loads(msg.data)
+        except Exception:
+            return
+        if not isinstance(dets, list):
+            return
+        best = None
+        for det in dets:
+            if not isinstance(det, dict):
+                continue
+            name = str(det.get('class_name', '')).strip().lower()
+            if name not in self._wrist_plant_classes:
+                continue
+            try:
+                conf = float(det.get('confidence') or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if conf < self._wrist_conf:
+                continue
+            bbox = det.get('bbox') or []
+            if len(bbox) != 4:
+                continue
+            w = max(1.0, float(self._lock_img_w))
+            h = max(1.0, float(self._lock_img_h))
+            cx = (float(bbox[0]) + float(bbox[2])) / 2.0
+            cy = (float(bbox[1]) + float(bbox[3])) / 2.0
+            entry = {
+                'centroid_x': (cx - w / 2.0) / (w / 2.0),
+                'centroid_y': (cy - h / 2.0) / (h / 2.0),
+                'confidence': conf,
+                'class_name': name,
+                'area': abs(float(bbox[2]) - float(bbox[0]))
+                        * abs(float(bbox[3]) - float(bbox[1])),
+            }
+            if best is None or abs(entry['centroid_x']) < abs(best['centroid_x']):
+                best = entry
+        self._wrist_plant = best
+        if best is not None:
+            self._wrist_plant_time = time.time()
+            # A real detection counts as seeing the plant, so the recovery
+            # timer does not fire while the arm is plainly looking at one.
+            self._last_plant_seen_time = self._wrist_plant_time
+
+    def _wrist_plant_now(self):
+        """The current wrist detection, or None if there is none or it has
+        gone stale."""
+        if self._wrist_plant is None:
+            return None
+        if (time.time() - self._wrist_plant_time) > self._wrist_max_age:
+            return None
+        return self._wrist_plant
 
     def _cv_part_cb(self, msg):
         try:
@@ -878,9 +991,14 @@ class ArmScannerNode(Node):
         part = str(self._latest_cv_data.get('detected_part', 'unknown'))
         focus_score = float(self._latest_cv_data.get('focus_score', 100.0))
 
-        # A plant must actually be in view: without this the loop pointed the
-        # arm at empty space while searching forever (part=unknown).
-        if not bool(self._latest_cv_data.get('plant_present', False)):
+        # A plant must actually be in view. The wrist detector decides that
+        # when it has an opinion — colour masking alone calls a green wall
+        # a plant, and a beige pot nothing.
+        wrist = self._wrist_plant_now()
+        if wrist is None:
+            if not bool(self._latest_cv_data.get('plant_present', False)):
+                return
+        elif self._recentre_on_wrist(wrist, now):
             return
 
         # Cooldown between adjustments.
@@ -913,6 +1031,53 @@ class ArmScannerNode(Node):
             self.get_logger().info(
                 f'[Active Re-Orientation] Adjusted Wrist ({adj_angles[3]:.1f}°) & Base ({adj_angles[0]:.1f}°) '
                 f'-> Restoring Optimal Visibility (Focus: {focus_score:.1f}, Part: {part})')
+
+    def _recentre_on_wrist(self, wrist, now):
+        """Pull the aim back onto a plant the wrist camera can see but is
+        not centred on. Returns True when an adjustment was made.
+
+        Unlike the blind nudge below — a fixed +2.5 deg wrist, -1.5 deg
+        base whichever way the plant had drifted — this moves by how far
+        off-centre the plant actually is, in the direction it actually is.
+        """
+        dx = float(wrist.get('centroid_x', 0.0))
+        dy = float(wrist.get('centroid_y', 0.0))
+        if abs(dx) <= self._wrist_tol and abs(dy) <= self._wrist_tol:
+            return False
+
+        adj = list(self._vp_target_angles)
+
+        # Horizontal: same geometry the lock-on uses, so the same sign.
+        # A plant right of centre means the base must come back.
+        if abs(dx) > self._wrist_tol:
+            theta_h = math.degrees(
+                math.atan(dx * math.tan(math.radians(self._lock_hfov / 2.0))))
+            step = float(np.clip(theta_h * self._wrist_gain,
+                                 -self._wrist_max_deg, self._wrist_max_deg))
+            adj[0] = float(np.clip(adj[0] - step, 0.0, 220.0))
+
+        # Vertical: proportional, bounded, and sign-configurable.
+        if abs(dy) > self._wrist_tol:
+            theta_v = math.degrees(
+                math.atan(dy * math.tan(math.radians(self._lock_vfov / 2.0))))
+            step = float(np.clip(theta_v * self._wrist_gain,
+                                 -self._wrist_max_deg, self._wrist_max_deg))
+            adj[3] = float(np.clip(adj[3] + self._wrist_pitch_sign * step,
+                                   0.0, 90.0))
+
+        if adj == list(self._vp_target_angles):
+            return False
+
+        msg = Float64MultiArray()
+        msg.data = adj
+        self._joint_pub.publish(msg)
+        self._vp_target_angles = adj
+        self._reorient_last = now
+        self._reorient_count = getattr(self, '_reorient_count', 0) + 1
+        self.get_logger().info(
+            f'[Re-centre] plant off centre by ({dx:+.2f}, {dy:+.2f}) — '
+            f'base {adj[0]:.1f}deg, wrist {adj[3]:.1f}deg')
+        return True
 
     def _timer_cb(self):
         if not self._scanning or not self._scan_queue:
@@ -953,7 +1118,17 @@ class ArmScannerNode(Node):
 
         if self._dwell_start is not None:
             elapsed = (now - self._dwell_start).nanoseconds * 1e-9
-            
+
+            # Say so the moment the joints stop, so whoever is taking the
+            # photographs can wait for a still camera instead of guessing
+            # with a timer. Nothing announced this before: the viewpoint
+            # number went out BEFORE the arm was told to move to it, so a
+            # capture timed from that landed mid-travel and came out
+            # blurred every time.
+            if self._at_viewpoint() and not self._settled_announced:
+                self._settled_announced = True
+                self._pub_status('scanning', vp_idx, settled=True)
+
             # Active visual servoing check midway through dwell, only if the arm has arrived
             if self._at_viewpoint() and elapsed >= 0.5 * dwell_to_use:
                 self._adjust_active_reorientation()
@@ -975,7 +1150,7 @@ class ArmScannerNode(Node):
         self._move_to_viewpoint(vp_idx)
         self._dwell_start = now
 
-    def _pub_status(self, status, viewpoint=0, reason=''):
+    def _pub_status(self, status, viewpoint=0, reason='', settled=False):
         label = (
             self._scan_queue[viewpoint][0]
             if self._scan_queue and viewpoint < len(self._scan_queue)
@@ -990,6 +1165,10 @@ class ArmScannerNode(Node):
             # Sampled viewpoints are labelled vNN_...; the start pose and the
             # transition steps are travel, not shots worth keeping.
             'capture': label.startswith('v') and label[1:3].isdigit(),
+            # True only once the joints have actually reached this
+            # viewpoint and the arm has stopped. A photograph taken before
+            # this is taken from a moving camera, and comes out blurred.
+            'settled': bool(settled),
             'current_label': label,
             'parts_covered': list(self._parts_covered),
         })

@@ -157,13 +157,15 @@ class PlantRunNode(Node):
         # How far off the remembered heading the plant may be when the
         # robot turns back to look for it again.
         self.declare_parameter('reacquire_window_rad', 0.45)
-        # How wide to sweep, either side of the remembered heading, when
-        # the plant is not where it was expected.
-        self.declare_parameter('reacquire_sweep_rad', 0.6)
         self.declare_parameter('heading_tolerance_rad', 0.12)
 
         # -- speeds ----------------------------------------------------
         self.declare_parameter('survey_turn_speed', 0.5)
+        # Exploring: creep forward and let the obstacle layer do the
+        # swerving. It already reverses and turns away from walls, so the
+        # run node does not steer here — it just keeps going and stops to
+        # look round now and then.
+        self.declare_parameter('explore_speed', 0.15)
         self.declare_parameter('approach_max_linear', 0.16)
         self.declare_parameter('approach_max_angular', 0.5)
         self.declare_parameter('approach_min_linear', 0.04)
@@ -182,6 +184,11 @@ class PlantRunNode(Node):
         self.declare_parameter('turn_away_timeout_s', 8.0)
         self.declare_parameter('pick_timeout_s', 5.0)
         self.declare_parameter('reacquire_timeout_s', 35.0)
+        # How long one push into the room lasts before stopping to look
+        # round again, and how many of those a run may make without
+        # finding anything. Reaching a plant resets the count.
+        self.declare_parameter('explore_leg_s', 12.0)
+        self.declare_parameter('max_explore_legs', 6)
         # How long the arm has to actually start moving after being asked.
         self.declare_parameter('scan_start_timeout_s', 25.0)
         self.declare_parameter('nav_server_wait_s', 5.0)
@@ -228,6 +235,13 @@ class PlantRunNode(Node):
                                '/ecobot/plant_scan_status')
         self.declare_parameter('scanner_status_topic', '/arm/scanner_status')
         self.declare_parameter('scan_samples', 6)
+        # Where the arm's turning axis sits relative to base_footprint, so
+        # a plant measured by the camera can be handed to the arm in the
+        # frame the arm works in (x forward, y left, z up from the floor).
+        self.declare_parameter('arm_base_offset_x', 0.0)
+        self.declare_parameter('arm_base_offset_y', 0.0)
+        # The arm refuses a target further than this from its own axis.
+        self.declare_parameter('arm_max_reach_m', 0.85)
         # Stand still while no run is going. obstacle_avoidance.py drives
         # the robot forward by itself when no driver is publishing, so
         # silence here is not the same thing as stillness.
@@ -267,10 +281,10 @@ class PlantRunNode(Node):
         self._revisit_radius = float(gp('revisit_radius_m').value)
         self._max_range = float(gp('max_plant_range_m').value)
         self._reacquire_window = float(gp('reacquire_window_rad').value)
-        self._reacquire_sweep = float(gp('reacquire_sweep_rad').value)
         self._heading_tol = float(gp('heading_tolerance_rad').value)
 
         self._survey_speed = float(gp('survey_turn_speed').value)
+        self._explore_speed = float(gp('explore_speed').value)
         self._max_lin = float(gp('approach_max_linear').value)
         self._max_ang = float(gp('approach_max_angular').value)
         self._min_lin = float(gp('approach_min_linear').value)
@@ -283,6 +297,7 @@ class PlantRunNode(Node):
             'SURVEY': float(gp('survey_timeout_s').value),
             'PICK': float(gp('pick_timeout_s').value),
             'REACQUIRE': float(gp('reacquire_timeout_s').value),
+            'EXPLORE': float(gp('explore_leg_s').value),
             'DRIVE': float(gp('drive_timeout_s').value),
             'HANDOVER': float(gp('handover_timeout_s').value),
             'APPROACH': float(gp('approach_timeout_s').value),
@@ -302,8 +317,12 @@ class PlantRunNode(Node):
         self._min_sightings_to_act = int(gp('min_sightings_to_act').value)
         self._turn_away_rad = float(gp('turn_away_rad').value)
         self._scan_samples = int(gp('scan_samples').value)
+        self._arm_off_x = float(gp('arm_base_offset_x').value)
+        self._arm_off_y = float(gp('arm_base_offset_y').value)
+        self._arm_max_reach = float(gp('arm_max_reach_m').value)
         self._hold_still_when_idle = bool(gp('hold_still_when_idle').value)
         self._max_surveys = int(gp('max_surveys_without_progress').value)
+        self._max_explore_legs = int(gp('max_explore_legs').value)
 
         # -- run state --------------------------------------------------
         self._state = 'IDLE'
@@ -315,8 +334,8 @@ class PlantRunNode(Node):
         self._target_xy = None        # goal position, worked out fresh
         self._run_active = False
         self._surveys_done = 0        # since a plant was last scanned
+        self._explore_legs = 0        # since a plant was last scanned
         self._pending = None          # a state change queued for the tick
-        self._reacquire_dir = 1.0
 
         self._sweep_turned = 0.0
         self._sweep_last_yaw = None
@@ -332,6 +351,9 @@ class PlantRunNode(Node):
         self._last_seen_time = 0.0
         self._last_bearing = 0.0
         self._last_range = None
+        # The whole detection behind the last good look, kept so the arm
+        # can be told how tall and wide the plant actually is.
+        self._last_det = None
 
         self._scan_seen_running = False
         self._scan_finished = False
@@ -597,7 +619,8 @@ class PlantRunNode(Node):
 
     _DRIVERS = {
         'SURVEY': 'camera', 'REACQUIRE': 'camera', 'APPROACH': 'camera',
-        'TURN_AWAY': 'camera', 'DRIVE': 'map', 'HANDOVER': 'handover',
+        'TURN_AWAY': 'camera', 'EXPLORE': 'camera',
+        'DRIVE': 'map', 'HANDOVER': 'handover',
     }
 
     def _enter(self, state, say):
@@ -632,6 +655,7 @@ class PlantRunNode(Node):
         self._plants = []
         self._target = None
         self._surveys_done = 0
+        self._explore_legs = 0
         self._nav_missing = False
         self._queue('SURVEY', 'starting the run — looking around for plants')
 
@@ -661,8 +685,10 @@ class PlantRunNode(Node):
                 # this plant if it is seen again.
                 if self._target_xy is not None:
                     self._target.x, self._target.y = self._target_xy
-                # A survey that led to a scan was not a wasted one.
+                # A look round or a push into the room that led to a scan
+                # was not a wasted one.
                 self._surveys_done = 0
+                self._explore_legs = 0
             elif state == 'failed':
                 self.get_logger().warning(
                     f'giving up on the {self._target.name}: {reason}')
@@ -685,8 +711,13 @@ class PlantRunNode(Node):
 
     def _on_enter(self, state, say):
         if state == 'REACQUIRE':
-            self._reacquire_dir = 1.0
             self._last_seen_time = 0.0
+        elif state == 'EXPLORE':
+            self._explore_legs += 1
+            # A push into the room puts the robot somewhere new, so the
+            # look-rounds that found nothing back there do not count
+            # against the look-round from here.
+            self._surveys_done = 0
         elif state == 'SURVEY':
             self._surveys_done += 1
             self._sweep_turned = 0.0
@@ -716,8 +747,9 @@ class PlantRunNode(Node):
             # report. It is told to scan where the robot already is: this
             # node did the positioning, and nothing else may touch the
             # wheels until the arm says it has finished.
-            self._send_scan_cmd({'action': 'scan_here',
-                                 'samples': self._scan_samples})
+            payload = {'action': 'scan_here', 'samples': self._scan_samples}
+            payload.update(self._plant_geometry())
+            self._send_scan_cmd(payload)
             return
         elif state == 'TURN_AWAY':
             self._turn_away_turned = 0.0
@@ -823,19 +855,65 @@ class PlantRunNode(Node):
             return
 
         # On the remembered heading with nothing in view. The robot has
-        # driven since, so the heading has gone stale; sweep either side
-        # of it rather than giving up straight away.
-        swing = self._reacquire_sweep
-        offset = _wrap(pose[2] - want)
-        if abs(offset) >= swing:
-            self._reacquire_dir = -math.copysign(1.0, offset)
-        self._drive(0.0, self._reacquire_dir * self._max_ang * 0.5)
-        self._say = 'the plant is not where it was — sweeping to find it'
+        # driven since, so the heading has gone stale. Keep turning the
+        # same way and look right round, rather than flicking a few
+        # degrees either side of a heading that is already known to be
+        # wrong — that only ever re-checked the spot the plant is not in.
+        self._drive(0.0, self._survey_speed)
+        self._say = 'the plant is not where it was — looking round for it'
 
         if self._deadline_passed():
             self._drive(0.0, 0.0)
             self._fail_target(
                 'could not find that plant again from here')
+
+    def _watch_for_plants(self):
+        """Record everything plant-like in view and hand back the candidate
+        that is best established, or None. Used by both the look-round and
+        the push into the room — either can act the moment a plant is
+        plainly there."""
+        best = None
+        if (time.time() - self._detections_time) < self._det_max_age:
+            for det in self._detections:
+                hit = self._record_sighting(det)
+                if hit is not None and hit.state == 'pending' and (
+                        best is None or hit.sightings > best.sightings):
+                    best = hit
+        if best is not None and best.sightings >= self._min_sightings_to_act:
+            return best
+        return None
+
+    # ---- exploring -------------------------------------------------------
+
+    def _tick_explore(self):
+        """Push into the room looking for a plant the look-round could not
+        see from where it stood.
+
+        The obstacle layer does the steering. It already slows for what is
+        ahead, swerves toward the freer side and reverses out of a dead
+        end, so this just keeps asking to go forward and lets that happen
+        underneath. Avoidance stays fully on — this is the one state where
+        the robot is deliberately driving at whatever is in front of it
+        without knowing what it is.
+        """
+        sighted = self._watch_for_plants()
+        if sighted is not None:
+            self._drive(0.0, 0.0)
+            self._queue('PICK',
+                        f'a {sighted.name} came into view {sighted.rng:.2f}m '
+                        'off while exploring')
+            return
+
+        if self._deadline_passed():
+            self._drive(0.0, 0.0)
+            self._queue('SURVEY', 'far enough — stopping to look round')
+            return
+
+        self._drive(self._explore_speed, 0.0)
+        self._say = (f'exploring — pushing into the room, leg '
+                     f'{self._explore_legs}/{self._max_explore_legs}, '
+                     f'{self._elapsed():.0f}s of '
+                     f'{self._timeouts["EXPLORE"]:.0f}s')
 
     # ---- the survey ------------------------------------------------------
 
@@ -851,20 +929,12 @@ class PlantRunNode(Node):
                 ) * self._yaw_scale
             self._sweep_last_yaw = self._odom_yaw
 
-        seen_now = None
-        if (time.time() - self._detections_time) < self._det_max_age:
-            for det in self._detections:
-                hit = self._record_sighting(det)
-                if hit is not None and hit.state == 'pending' and (
-                        seen_now is None
-                        or hit.sightings > seen_now.sightings):
-                    seen_now = hit
+        seen_now = self._watch_for_plants()
 
         # A plant is in view and has held still enough frames to be real.
         # Stop turning and go to it — the aiming is REACQUIRE's job, and
         # it is better at it than a sweep that is already moving past.
-        sighted = (self._act_on_sight and seen_now is not None
-                   and seen_now.sightings >= self._min_sightings_to_act)
+        sighted = self._act_on_sight and seen_now is not None
         swept = self._sweep_turned >= self._sweep_target
         timed_out = self._deadline_passed()
         if not (sighted or swept or timed_out):
@@ -883,12 +953,22 @@ class PlantRunNode(Node):
         else:
             why = 'the look-round time limit'
         pending = sum(1 for p in self._plants if p.state == 'pending')
-        if timed_out and not pending and \
-                self._surveys_done >= self._max_surveys:
-            self._finish_run(f'no plants found after {why} — nothing to do')
+        if pending:
+            self._queue('PICK', f'{why} reached — '
+                                f'{len(self._plants)} plant(s) known')
             return
-        self._queue('PICK', f'{why} reached — '
-                            f'{len(self._plants)} plant(s) known')
+
+        # Nothing left to go to from here. Before giving up, go and look
+        # somewhere else: standing still and looking round again from the
+        # same spot can only ever see the same nothing.
+        if self._explore_legs < self._max_explore_legs:
+            self._queue('EXPLORE',
+                        f'{why} — no plant in sight from here, moving on '
+                        'to look elsewhere')
+            return
+        self._finish_run(
+            f'no plants found after {why} and '
+            f'{self._explore_legs} push(es) into the room — nothing to do')
 
     # ---- the long drive, map driver -------------------------------------
 
@@ -1071,9 +1151,10 @@ class PlantRunNode(Node):
                 continue
             score = abs(_wrap(bearing - reference))
             if best is None or score < best[0]:
-                best = (score, bearing, rng)
+                best = (score, bearing, rng, det)
         if best is None:
             return None, None
+        self._last_det = best[3]
         return best[1], best[2]
 
     def _tick_approach(self):
@@ -1172,6 +1253,63 @@ class PlantRunNode(Node):
 
     # ---- the scan --------------------------------------------------------
 
+    def _plant_geometry(self):
+        """Where the plant is and how big it is, in the frame the arm works
+        in: x forward from the arm's axis, y left, z up from the floor.
+
+        Without this the arm was told a fixed guess — 0.30m ahead, 0.50m
+        up — while the robot was actually parked 0.65m away. It aimed a
+        third of a metre short of the plant, which barely shows at the
+        bottom of the sweep and sends the camera clean over the top of the
+        plant into the ceiling at the top of it.
+
+        Returns nothing at all when there is no measurement to give, so
+        the arm falls back to its own defaults rather than being handed a
+        number this node made up.
+        """
+        det = self._last_det
+        rng = self._last_range
+        if det is None or rng is None:
+            self.get_logger().warning(
+                'no measurement of the plant to give the arm — it will use '
+                'its own defaults, and may not be aimed well')
+            return {}
+
+        bearing = self._last_bearing
+        x = rng * math.cos(bearing) - self._arm_off_x
+        y = rng * math.sin(bearing) - self._arm_off_y
+        reach = math.hypot(x, y)
+        if reach > self._arm_max_reach:
+            # The arm refuses anything past its reach, and would simply
+            # not scan. Pull the aim point in along the same bearing: the
+            # plant is a body, not a point, so its near side is still a
+            # fair thing to look at.
+            scale = self._arm_max_reach / reach
+            x *= scale
+            y *= scale
+            self.get_logger().warning(
+                f'plant is {reach:.2f}m from the arm, past its '
+                f'{self._arm_max_reach}m reach — aiming at its near side')
+
+        geo = {'x': round(x, 3), 'y': round(y, 3)}
+
+        centre = det.get('center_height')
+        if centre is None:
+            return geo
+        geo['z'] = round(float(centre), 3)
+        for src, dst in (('height', 'plant_height'), ('width', 'plant_width'),
+                         ('top_height', 'z_top'),
+                         ('bottom_height', 'z_bottom')):
+            val = det.get(src)
+            if val is not None:
+                geo[dst] = round(float(val), 3)
+        geo['plant_type'] = str(det.get('class_name', 'potted plant'))
+        self.get_logger().info(
+            f'telling the arm the plant is {geo["x"]:.2f}m ahead, '
+            f'{geo["z"]:.2f}m up, '
+            f'{geo.get("plant_height", 0.0):.2f}m tall')
+        return geo
+
     def _tick_scan(self):
         # Dead still. A zero every tick, not silence: silence lets the
         # safety layer drive the robot forward by itself.
@@ -1246,6 +1384,7 @@ class PlantRunNode(Node):
 
         handler = {
             'SURVEY': self._tick_survey,
+            'EXPLORE': self._tick_explore,
             'PICK': self._tick_pick,
             'REACQUIRE': self._tick_reacquire,
             'DRIVE': self._tick_drive,

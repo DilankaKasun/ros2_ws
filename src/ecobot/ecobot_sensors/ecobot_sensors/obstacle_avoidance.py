@@ -227,6 +227,42 @@ class ObstacleAvoidance(Node):
             return 0.05
         return (min_dist - 0.2) / (self.warn_distance - 0.2)
 
+    def _publish_view(self, depth_image, zones, w, h, label):
+        """Push a frame to the MJPEG stream for a path that returns early.
+
+        The full drawing below has the arrows and speed colouring for the
+        avoidance states; this is the plain version — zone bars and a
+        label — so the stream does not freeze while the robot is simply
+        turning on the spot.
+        """
+        try:
+            colored = cv2.applyColorMap(
+                cv2.convertScaleAbs(depth_image, alpha=0.03), cv2.COLORMAP_JET)
+            if zones:
+                zw = w // self.num_zones
+                for i in range(self.num_zones):
+                    d = zones[i]
+                    col = ((0, 0, 255) if d < self.safe_distance
+                           else (0, 255, 255) if d < self.warn_distance
+                           else (0, 255, 0))
+                    cv2.rectangle(colored, (i * zw, 0), ((i + 1) * zw - 1, h - 1),
+                                  col, 2)
+                    cv2.putText(colored, f'{d:.1f}m' if d < 10 else '---',
+                                (i * zw + 4, h - 8), cv2.FONT_HERSHEY_SIMPLEX,
+                                0.4, col, 1)
+            cv2.putText(colored, label, (w // 2 - 130, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 3)
+            _, jpg = cv2.imencode('.jpg', colored,
+                                  [cv2.IMWRITE_JPEG_QUALITY, 70])
+            with ObstacleMJPEGHandler.frame_lock:
+                ObstacleMJPEGHandler.frame = jpg.tobytes()
+            if self.show_viewer:
+                cv2.imshow('ecobot — Obstacle Avoidance', colored)
+                cv2.waitKey(1)
+        except Exception:
+            # The viewer is a convenience; never let it stop the safety loop.
+            pass
+
     def avoidance_loop(self):
         nav2_expired = (
             self.get_clock().now() - self.last_nav_vel_time
@@ -274,10 +310,19 @@ class ObstacleAvoidance(Node):
                 depth_image = self.latest_depth.copy()
 
         cmd_source_active = nav2_active or goto_active
+        # Take a COPY of the driver's command. The scaling below assigns
+        # `twist = base_cmd` and then multiplies twist.linear.x — with a
+        # reference that multiplied the STORED message, so each tick
+        # re-scaled an already-scaled value and the driver's speed decayed
+        # toward zero on its own between messages.
         if goto_active and not nav2_active:
-            base_cmd = self.latest_goto_vel
+            src = self.latest_goto_vel
         else:
-            base_cmd = self.latest_nav_vel if nav2_active else Twist()
+            src = self.latest_nav_vel if nav2_active else Twist()
+        base_cmd = Twist()
+        base_cmd.linear.x = src.linear.x
+        base_cmd.linear.y = src.linear.y
+        base_cmd.angular.z = src.angular.z
 
         zones = None
         h, w = 480, 640
@@ -320,6 +365,28 @@ class ObstacleAvoidance(Node):
 
         cmd = 'FORWARD'
         sr = self.speed_ratio(min_dist)
+
+        # Turning on the spot cannot drive the robot into anything, so a
+        # command with no forward motion is passed through untouched.
+        # Overruling it was actively harmful: the robot looks around by
+        # rotating, and this layer replaced that steady sweep with its own
+        # full-speed turn toward whichever side was momentarily more open.
+        # As the robot turned, that side kept flipping — so instead of a
+        # look round, the robot twitched left, right, left on the spot and
+        # never saw past its own start. Forward motion stays fully guarded
+        # below; only pure rotation is let through.
+        rotating_in_place = (
+            cmd_source_active
+            and abs(base_cmd.linear.x) < 0.01
+            and abs(base_cmd.angular.z) > 1e-3)
+
+        if rotating_in_place:
+            self._danger_active = False
+            self.escape_state = 'NONE'
+            self.escape_start_time = None
+            self.cmd_pub.publish(base_cmd)
+            self._publish_view(depth_image, zones, w, h, 'ROTATE IN PLACE')
+            return
 
         if not suppress_active and self.escape_state == 'NONE' and all_blocked:
             self.escape_state = 'REVERSE'

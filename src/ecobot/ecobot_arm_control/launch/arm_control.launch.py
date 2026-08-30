@@ -12,6 +12,9 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('enable_arm_camera', default_value='true'),
         DeclareLaunchArgument('enable_arm_scanner', default_value='true'),
+        # The detector on the wrist camera, so the arm can confirm it is
+        # looking at a plant rather than trusting a colour mask.
+        DeclareLaunchArgument('enable_wrist_detection', default_value='true'),
         DeclareLaunchArgument('enable_rl_agent', default_value='false'),
         DeclareLaunchArgument('enable_minicpm_vla', default_value='false'),
         DeclareLaunchArgument('enable_openvla', default_value='false'),
@@ -150,6 +153,35 @@ def generate_launch_description():
             parameters=[os.path.join(
                 get_package_share_directory('ecobot_arm_control'),
                 'config', 'arm_tracking_params.yaml')],
+            output='screen',
+        ),
+        # The object detector, pointed at the WRIST camera. The arm scanner
+        # uses this to decide whether it is really looking at a plant and
+        # to pull the aim back on when it drifts — colour masking alone
+        # calls a green wall a plant and a beige pot nothing.
+        #
+        # No depth or camera info: this one is only asked WHETHER a plant
+        # is in frame and WHERE in the frame, never how far away, so the
+        # detector's distance fields simply come back empty.
+        Node(
+            package='ecobot_sensors',
+            executable='ecobot_detection_node',
+            name='wrist_detection_node',
+            condition=IfCondition(LaunchConfiguration('enable_wrist_detection')),
+            parameters=[{
+                'model_path': '/home/ecobot/ros2_ws/src/ecobot/ecobot_sensors/models/yolov8n.engine',
+                'backend': 'tensorrt',
+                'conf_threshold': 0.35,
+                # Slower than the forward detector: the arm holds still at
+                # each viewpoint, so there is nothing to chase, and this
+                # shares a GPU with it.
+                'inference_rate': 4,
+                'camera_topic': '/arm/camera/image_raw',
+                'detections_topic': '/arm/detections',
+                'overlay_topic': '/arm/detection_image',
+                'depth_topic': '',
+                'camera_info_topic': '',
+            }],
             output='screen',
         ),
     ])

@@ -60,6 +60,10 @@ class PlantMissionNode(Node):
         self.declare_parameter('scan_samples', 6)
 
         self.declare_parameter('capture_delay_s', 1.4)
+        # Once the arm says it has stopped, how long to let the camera
+        # settle before the shutter. Only exposure and the last of the
+        # wobble — the arm is already still, so this is short.
+        self.declare_parameter('settle_delay_s', 0.4)
         self.declare_parameter('frame_max_age_s', 2.0)
         # A scan is over when the ARM says so. These two only catch an arm
         # that has stopped talking altogether. The old single 20s budget
@@ -80,6 +84,7 @@ class PlantMissionNode(Node):
         self._scan_samples = int(gp('scan_samples').value)
         self._paused_from = None
         self._capture_delay_s = float(gp('capture_delay_s').value)
+        self._settle_delay_s = float(gp('settle_delay_s').value)
         self._frame_max_age_s = float(gp('frame_max_age_s').value)
         self._scan_silence_timeout_s = float(gp('scan_silence_timeout_s').value)
         self._scan_hard_timeout_s = float(gp('scan_hard_timeout_s').value)
@@ -100,6 +105,11 @@ class PlantMissionNode(Node):
 
         self._last_scanner_status = None
         self._last_scanner_msg_time = None
+        self._last_geometry = {}
+        # Whether this arm reports settling at all, and which viewpoint has
+        # already been photographed, so one settle is one photograph.
+        self._saw_settled = False
+        self._captured_viewpoint = None
         self._scan_start_time = None
         self._capture_due_time = None
         self._pending_capture_label = None
@@ -172,7 +182,7 @@ class PlantMissionNode(Node):
         # because it is the node that drives. Acting on them here too
         # would put two nodes in charge of one run.
         if action == 'scan_here':
-            self._handle_scan_here()
+            self._handle_scan_here(data)
         elif action == 'stop':
             self._handle_stop()
         elif action == 'pause':
@@ -180,7 +190,13 @@ class PlantMissionNode(Node):
         elif action == 'resume':
             self._handle_resume()
 
-    def _handle_scan_here(self):
+    # Geometry fields plant_run_node measures and passes straight through
+    # to the arm. Aiming at a guess instead of these is what sent the top
+    # of the sweep over the plant and into the ceiling.
+    _GEOMETRY_FIELDS = ('x', 'y', 'z', 'plant_height', 'plant_width',
+                        'z_top', 'z_bottom', 'plant_type')
+
+    def _handle_scan_here(self, data=None):
         """Scan the plant the robot is already parked in front of.
 
         The only way a scan starts. plant_run_node has done the driving
@@ -199,7 +215,7 @@ class PlantMissionNode(Node):
             'scan_status': None, 'health': None, 'confidence': None,
             'notes': None, 'timestamp': None,
         }
-        self._start_arm_scan()
+        self._start_arm_scan(data or {})
 
     def _handle_stop(self):
         self._epoch += 1
@@ -241,7 +257,7 @@ class PlantMissionNode(Node):
                 f'ignoring resume: mission is {self._status}')
             return
         self.get_logger().info('resuming — rescanning the current plant')
-        self._start_arm_scan()
+        self._start_arm_scan(self._last_geometry)
 
     # ---- finishing one plant -------------------------------------------
 
@@ -258,18 +274,34 @@ class PlantMissionNode(Node):
 
     # ---- arm scan ---------------------------------------------------------
 
-    def _start_arm_scan(self):
+    def _start_arm_scan(self, data=None):
+        # Where the plant actually is, as measured by whoever parked the
+        # robot in front of it. Only the fields that were sent are passed
+        # on; anything missing falls back to this node's defaults, and the
+        # arm falls back to its own beyond that.
+        geometry = {k: (data or {})[k] for k in self._GEOMETRY_FIELDS
+                    if (data or {}).get(k) is not None}
+        self._last_geometry = geometry
         self._current_captures = []
         self._scan_start_time = self.get_clock().now()
         self._last_scanner_msg_time = None
+        self._captured_viewpoint = None
         self._last_scanner_status = None
         # Defensive reset — arm_scanner_node can also auto-start a scan
         # from /ecobot/detections; this guards against one still running.
         self._scanner_cmd_pub.publish(String(data=json.dumps({'action': 'stop'})))
-        self._scanner_cmd_pub.publish(String(data=json.dumps({
-            'action': 'scan', 'x': self._arm_scan_x,
-            'y': self._arm_scan_y, 'z': self._arm_scan_z,
-            'samples': self._scan_samples})))
+        cmd = {'action': 'scan', 'x': self._arm_scan_x,
+               'y': self._arm_scan_y, 'z': self._arm_scan_z,
+               'samples': self._scan_samples}
+        cmd.update(geometry)
+        if geometry:
+            self.get_logger().info(
+                f'scanning a measured plant: {geometry}')
+        else:
+            self.get_logger().warning(
+                'no plant measurements given — aiming the arm at the '
+                'fallback point, which may not be where the plant is')
+        self._scanner_cmd_pub.publish(String(data=json.dumps(cmd)))
         self._status = 'SCANNING'
         self._publish_status()
 
@@ -289,8 +321,27 @@ class PlantMissionNode(Node):
             # send this flag, so treat its absence as "capture", keeping the
             # previous behaviour rather than silently taking no photos.
             wants_capture = data.get('capture', True)
-            if wants_capture and (
-                    prev is None or prev.get('status') != 'scanning'
+            if not wants_capture:
+                return
+
+            if data.get('settled'):
+                # The arm has reached this viewpoint and stopped. This is
+                # the only moment worth photographing from.
+                self._saw_settled = True
+                if self._captured_viewpoint != data.get('viewpoint'):
+                    self._captured_viewpoint = data.get('viewpoint')
+                    self._pending_capture_label = data.get('current_label', '')
+                    self._capture_due_time = (
+                        self.get_clock().now()
+                        + Duration(seconds=self._settle_delay_s))
+                return
+
+            # No settle signal has ever arrived, so this is an arm that
+            # cannot say when it has stopped. Fall back to the old fixed
+            # wait rather than never taking a photograph at all.
+            if self._saw_settled:
+                return
+            if (prev is None or prev.get('status') != 'scanning'
                     or prev.get('viewpoint') != data.get('viewpoint')):
                 self._pending_capture_label = data.get('current_label', '')
                 self._capture_due_time = (

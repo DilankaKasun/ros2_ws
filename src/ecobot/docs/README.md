@@ -2,6 +2,12 @@
 
 Ecobot is a sophisticated ROS 2 Humble differential-drive mobile robot platform designed for autonomous indoor navigation, obstacle avoidance, object detection, and web-based teleoperation.
 
+## Building
+
+```bash
+colcon build --packages-up-to ecobot_motor_control ecobot_sensors ecobot_navigation ecobot_bringup ecobot_teleop ecobot_voice ecobot_mission ecobot_arm_control esp32_tof_sensors
+```
+
 ## Hardware Architecture
 
 *   **Compute:** Jetson Nano/Orin (Main processing unit)

@@ -65,6 +65,19 @@ DEFAULT_READABLE = {
     '/ecobot/detections': 0.25,
     '/ecobot/tof_ranges': 0.20,
     '/odom': 0.10,
+    # Which controller has the wheels, and what it is doing. Without this the
+    # dashboard's node view shows detection_goto as "no data" even while the
+    # node is running and publishing perfectly well on the LAN — the topic
+    # simply never crossed the bridge.
+    '/ecobot/goto_status': 0.25,
+    # What the wheels were actually told to do. Read-only here; the writable
+    # allowlist below is what governs whether a remote client may command it.
+    '/cmd_vel': 0.10,
+    # Whether the obstacle-avoidance layer has been asked to stand down. These
+    # decide whether an approach can reach a plant at all, so they are worth
+    # seeing from the dashboard when an approach stalls.
+    '/ecobot/goto_suppress_avoidance': 0.25,
+    '/ecobot/mission_suppress_avoidance': 0.25,
 }
 
 # Topics a remote client is allowed to publish to. Anything not listed is

@@ -77,6 +77,8 @@ class ObstacleAvoidance(Node):
         self.declare_parameter('depth_scale', 0.001)
         self.declare_parameter('tof_threshold', 2.0)
         self.declare_parameter('avoid_hysteresis', 0.15)
+        self.declare_parameter('mission_suppress_topic',
+                               '/ecobot/mission_suppress_avoidance')
 
         self.safe_distance = self.get_parameter('safe_distance').value
         self.warn_distance = self.get_parameter('warn_distance').value
@@ -92,6 +94,8 @@ class ObstacleAvoidance(Node):
         depth_topic = self.get_parameter('depth_topic').value
         self.depth_scale = self.get_parameter('depth_scale').value
         self.tof_threshold = self.get_parameter('tof_threshold').value
+        mission_suppress_topic = str(
+            self.get_parameter('mission_suppress_topic').value)
 
         self.bridge = CvBridge()
         self.latest_depth = None
@@ -136,6 +140,21 @@ class ObstacleAvoidance(Node):
         self.suppress_avoidance_timeout = 1.0
         self.last_suppress_avoidance_time = self.get_clock().now()
 
+        # plant_mission_node publishes here for the last stretch of a drive
+        # up to a plant, and for the whole arm scan. Unlike the goto signal
+        # above, this one is honoured while Nav2 is the command source: a
+        # Nav2 approach to a plant is the one case where the thing filling
+        # the depth image is the goal, not a hazard. Without it the layer
+        # reads the plant as an obstacle at safe_distance (0.9m) and steers
+        # the robot away from the standoff it was sent to (0.4m), so the
+        # goal is never reached. Same 1s fail-safe as the others: if the
+        # mission node dies, full avoidance comes back on its own.
+        self.mission_suppress_sub = self.create_subscription(
+            Bool, mission_suppress_topic, self.mission_suppress_cb, 10)
+        self.mission_suppress = False
+        self.mission_suppress_timeout = 1.0
+        self.last_mission_suppress_time = self.get_clock().now()
+
         self.depth_sub = self.create_subscription(
             Image, depth_topic, self.depth_cb, 10)
 
@@ -170,6 +189,10 @@ class ObstacleAvoidance(Node):
     def suppress_avoidance_cb(self, msg):
         self.suppress_avoidance = bool(msg.data)
         self.last_suppress_avoidance_time = self.get_clock().now()
+
+    def mission_suppress_cb(self, msg):
+        self.mission_suppress = bool(msg.data)
+        self.last_mission_suppress_time = self.get_clock().now()
 
     def depth_cb(self, msg: Image):
         try:
@@ -218,11 +241,20 @@ class ObstacleAvoidance(Node):
         suppress_expired = (
             self.get_clock().now() - self.last_suppress_avoidance_time
         ).nanoseconds / 1e9 > self.suppress_avoidance_timeout
-        # Only the goto (detection_goto auto-track) source can suppress —
-        # Nav2-driven navigation always keeps full avoidance.
+        mission_suppress_expired = (
+            self.get_clock().now() - self.last_mission_suppress_time
+        ).nanoseconds / 1e9 > self.mission_suppress_timeout
+        # Two ways to stand down. The goto signal is for detection_goto's own
+        # camera-driven approach, and stays barred while Nav2 is driving so a
+        # stale flag can never disarm a Nav2 run. The mission signal is the
+        # exception to that rule: plant_mission_node only raises it within
+        # suppress_avoidance_radius_m of the plant it is approaching, and
+        # while the arm is scanning one, so the long drive between plants
+        # still keeps full avoidance.
         suppress_active = (
-            self.suppress_avoidance and not suppress_expired
-            and goto_active and not nav2_active)
+            (self.suppress_avoidance and not suppress_expired
+             and goto_active and not nav2_active)
+            or (self.mission_suppress and not mission_suppress_expired))
 
         # detection_goto is deliberately driving toward (or parked in front
         # of) the very thing depth sees as "blocked" — the plant it means to

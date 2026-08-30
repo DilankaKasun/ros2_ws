@@ -28,10 +28,10 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile
 from sensor_msgs.msg import Image
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 from tf2_ros import (
     Buffer, ConnectivityException, ExtrapolationException, LookupException,
-    TransformListener,
+    TransformException, TransformListener,
 )
 
 from .gemini_client import GeminiClient
@@ -59,6 +59,12 @@ class PlantMissionNode(Node):
         self.declare_parameter('default_frame', 'map')
 
         self.declare_parameter('approach_standoff_m', 0.4)
+        # How near the plant the obstacle-avoidance layer is asked to stand
+        # down. Deliberately small: the drive between plants keeps full
+        # avoidance, only the last stretch up to the plant does not.
+        self.declare_parameter('suppress_avoidance_radius_m', 1.2)
+        self.declare_parameter('mission_suppress_topic',
+                               '/ecobot/mission_suppress_avoidance')
         self.declare_parameter('goal_wait_timeout_s', 90.0)
         self.declare_parameter('nav_server_wait_s', 5.0)
         self.declare_parameter('nav_settle_s', 0.5)
@@ -90,6 +96,8 @@ class PlantMissionNode(Node):
         self._auto_advance = bool(gp('auto_advance').value)
         self._default_frame = str(gp('default_frame').value)
         self._approach_standoff_m = float(gp('approach_standoff_m').value)
+        self._suppress_radius_m = float(
+            gp('suppress_avoidance_radius_m').value)
         self._nav_server_wait_s = float(gp('nav_server_wait_s').value)
         self._nav_settle_s = float(gp('nav_settle_s').value)
         self._fallback_target_classes = {
@@ -115,6 +123,7 @@ class PlantMissionNode(Node):
         self._current_captures = []
         self._fallback_waypoints = []
         self._epoch = 0
+        self._camera_path_paused = False
 
         self._nav_goal_handle = None
         self._nav_settle_due_time = None
@@ -157,6 +166,12 @@ class PlantMissionNode(Node):
         # the drive toward whatever plant it finds.
         self._goto_cmd_pub = self.create_publisher(
             String, '/ecobot/goto_target', 10)
+        # Asks obstacle_avoidance to stand down near a plant. Without it a
+        # Nav2 approach never arrives: that layer sees the plant itself as
+        # an obstacle at 0.9m and turns the robot away from the 0.4m
+        # standoff it was sent to, and can reverse and spin on top of that.
+        self._suppress_pub = self.create_publisher(
+            Bool, str(gp('mission_suppress_topic').value), 10)
 
         self._scan_capture_pub = self.create_publisher(
             String, str(gp('scan_capture_topic').value), 10)
@@ -275,6 +290,7 @@ class PlantMissionNode(Node):
         self._idx = -1
         self._error_msg = ''
         self._epoch += 1
+        self._pause_camera_path()
         self._advance_and_navigate()
 
     def _handle_set_waypoints(self, waypoints):
@@ -301,6 +317,7 @@ class PlantMissionNode(Node):
         self._scan_start_time = None
         self._current_captures = []
         self._current_result = None
+        self._resume_camera_path()
         self._status = 'STOPPED'
         self._publish_status()
 
@@ -334,6 +351,64 @@ class PlantMissionNode(Node):
             return
         self.get_logger().info('resuming — rescanning the current plant')
         self._start_arm_scan()
+
+    def _pause_camera_path(self):
+        """Stop detection_goto driving for the length of a waypoint run.
+
+        Nav2 owns the wheels during one, but detection_goto is otherwise
+        free to keep hunting plants, and it takes the wheels back one
+        second after Nav2 falls silent — which is exactly when this node
+        settles and starts the arm scan. The robot span while it was
+        photographing. It keeps publishing a zero cmd_vel while paused, so
+        the safety layer still sees a live command source.
+        """
+        self._goto_cmd_pub.publish(String(data=json.dumps(
+            {'action': 'pause_auto_track'})))
+        self._camera_path_paused = True
+
+    def _resume_camera_path(self):
+        """Hand the search-and-approach back once the waypoint run ends."""
+        if not self._camera_path_paused:
+            return
+        self._camera_path_paused = False
+        self._goto_cmd_pub.publish(String(data=json.dumps(
+            {'action': 'resume_auto_track'})))
+
+    def _distance_to_plant(self):
+        """Metres from the robot to the plant it is currently working on,
+        or None when the transform is not available."""
+        if not 0 <= self._idx < len(self._waypoints):
+            return None
+        wp = self._waypoints[self._idx]
+        frame = wp.get('frame') or self._default_frame
+        try:
+            # Non-blocking: this runs at 10Hz, so waiting on a missing
+            # transform here would eat the whole tick period.
+            tf = self._tf_buffer.lookup_transform(
+                frame, 'base_footprint', rclpy.time.Time(),
+                timeout=Duration(seconds=0.0))
+        except TransformException:
+            # Catch the base class, not the usual three: this runs inside
+            # the tick, and a bad frame on a caller-supplied waypoint
+            # raises InvalidArgumentException, which would escape and stop
+            # the timer for good.
+            return None
+        return math.hypot(wp['x'] - tf.transform.translation.x,
+                          wp['y'] - tf.transform.translation.y)
+
+    def _suppress_avoidance_now(self):
+        """Whether the robot is deliberately close to a plant right now.
+
+        True for the last stretch of an approach and for the whole scan;
+        false for the drive between plants, which keeps full avoidance.
+        """
+        if self._status in ('SCANNING', 'ANALYZING'):
+            return True
+        if self._status != 'NAVIGATING':
+            return False
+        dist = self._distance_to_plant()
+        # No transform means no idea how close we are — leave avoidance on.
+        return dist is not None and dist <= self._suppress_radius_m
 
     def _normalize_waypoints(self, waypoints):
         out = []
@@ -388,6 +463,7 @@ class PlantMissionNode(Node):
         self._current_captures = []
 
         if self._idx >= len(self._waypoints) - 1:
+            self._resume_camera_path()
             self._status = 'COMPLETE'
             self._publish_status()
             return
@@ -413,6 +489,7 @@ class PlantMissionNode(Node):
 
         if not self._nav_client.wait_for_server(timeout_sec=self._nav_server_wait_s):
             self.get_logger().error('nav2 action server not available')
+            self._resume_camera_path()
             self._status = 'ERROR'
             self._error_msg = 'nav2 action server not available'
             self._publish_status()
@@ -641,6 +718,7 @@ class PlantMissionNode(Node):
     def _tick(self):
         now = self.get_clock().now()
         self._publish_status()
+        self._suppress_pub.publish(Bool(data=self._suppress_avoidance_now()))
 
         if self._nav_settle_due_time is not None and now >= self._nav_settle_due_time:
             self._nav_settle_due_time = None

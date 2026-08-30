@@ -60,6 +60,13 @@ class DetectionGoto(Node):
         self.declare_parameter('depth_scale', 0.001)
         self.declare_parameter('obstacle_stop_distance', 0.3)
         self.declare_parameter('search_timeout', 20.0)
+        # The boot-time 360 scan surveys the room and then drives to the
+        # nearest plant it found. It ends only when ODOMETRY has measured a
+        # full turn, so any under-count leaves the robot rotating for ever,
+        # ignoring plants it can see perfectly well. Bound it by time too.
+        self.declare_parameter('startup_scan_timeout_s', 45.0)
+        # Switch the survey off to go straight to "see a plant, drive to it".
+        self.declare_parameter('enable_startup_scan', True)
         self.declare_parameter('search_speed', 0.25)
         self.declare_parameter('avoid_distance', 0.4)
         self.declare_parameter('avoid_angle', 1.05)
@@ -169,6 +176,10 @@ class DetectionGoto(Node):
         self.obstacle_stop_dist = float(
             self.get_parameter('obstacle_stop_distance').value)
         self.search_timeout = float(self.get_parameter('search_timeout').value)
+        self.startup_scan_timeout_s = float(
+            self.get_parameter('startup_scan_timeout_s').value)
+        self._enable_startup_scan = bool(
+            self.get_parameter('enable_startup_scan').value)
         self.search_speed = float(self.get_parameter('search_speed').value)
         self.avoid_distance = float(self.get_parameter('avoid_distance').value)
         self.avoid_angle = float(self.get_parameter('avoid_angle').value)
@@ -226,8 +237,12 @@ class DetectionGoto(Node):
         self.detections = []
         self.target_class = None
         self.target_pos = (0.0, 0.0, 0.0)
-        self.active = True
-        self._mode = 'startup_scan'
+        # With the survey switched off the node stays idle until a plant
+        # comes into view, and the ordinary auto-track path takes it. That
+        # path is skipped entirely while the survey runs, because it only
+        # gets called when the node is inactive.
+        self.active = bool(self._enable_startup_scan)
+        self._mode = 'startup_scan' if self._enable_startup_scan else 'idle'
         self._wp_target = (0.0, 0.0)
         self._wp_frame = 'odom'
         self.last_seen = None
@@ -424,6 +439,21 @@ class DetectionGoto(Node):
             self.waypoints = []
             self._publish_waypoints()
             self.get_logger().info('waypoints cleared')
+        elif action == 'pause_auto_track':
+            # Stand down completely for the duration of a waypoint mission.
+            # Nav2 owns the wheels then, and this node must neither pick a
+            # target of its own nor rotate away while the arm is scanning.
+            # A plain 'cancel' is not enough: with no target selected it
+            # leaves auto-track unpaused, so the very next detection starts
+            # a fresh chase. The control loop keeps publishing a zero
+            # cmd_vel while stopped, which is what stops the downstream
+            # safety layer reading "no command source" and creeping.
+            self._stop('IDLE')
+            self._auto_track_paused = True
+            self._resume_pending = False
+            self._parked_suppress = False
+            self._post_inspection_gate = False
+            self.get_logger().info('auto-track paused by mission')
         elif action == 'resume_auto_track':
             self._auto_track_paused = False
             self._parked_suppress = False
@@ -591,7 +621,18 @@ class DetectionGoto(Node):
         return sensed < threshold
 
     def _publish_status(self, distance=None):
-        payload = {'status': self.status, 'target_class': self.target_class}
+        # 'mode' matters as much as 'status' when debugging: several
+        # controllers report TRACKING, and 'distance' does not mean the same
+        # thing in each — in tracking it is metres to the plant, in waypoint
+        # mode it is metres left to the saved point. Without the mode there
+        # is no way to tell which number you are reading.
+        payload = {
+            'status': self.status,
+            'target_class': self.target_class,
+            'mode': self._mode,
+            'active': bool(self.active),
+            'auto_track_paused': bool(self._auto_track_paused),
+        }
         if distance is not None:
             payload['distance'] = round(distance, 2)
         self.status_pub.publish(String(data=json.dumps(payload)))
@@ -699,8 +740,11 @@ class DetectionGoto(Node):
             self._startup_scan_start_yaw = self._odom_yaw
             self._startup_scan_last_yaw = self._startup_scan_start_yaw
             self._startup_scan_accumulated_yaw = 0.0
+            self._startup_scan_started = self.get_clock().now()
             self._scanned_plants = []
-            self.get_logger().info('Starting 360-degree startup scan...')
+            self.get_logger().info(
+                f'Starting 360-degree startup scan '
+                f'(giving up after {self.startup_scan_timeout_s:.0f}s)...')
 
         current_yaw = self._odom_yaw
 
@@ -744,9 +788,36 @@ class DetectionGoto(Node):
                         'det': d
                     })
 
-        if self._startup_scan_accumulated_yaw >= 2 * math.pi - 0.1:
-            self.get_logger().info(f'360-degree scan complete. Found {len(self._scanned_plants)} plants.')
+        turned = math.degrees(self._startup_scan_accumulated_yaw)
+        elapsed = (now - self._startup_scan_started).nanoseconds * 1e-9
+        timed_out = elapsed > self.startup_scan_timeout_s
+        if timed_out and self._startup_scan_accumulated_yaw < 2 * math.pi - 0.1:
+            # Odometry never reported a full turn. Stop anyway and use what
+            # was seen, rather than rotating on the spot for ever with a
+            # perfectly good plant in view.
+            self.get_logger().warn(
+                f'startup scan gave up after {elapsed:.0f}s: odometry only '
+                f'measured {turned:.0f} of 360 degrees. Check that the wheel '
+                f'encoders count while the robot turns. Using the '
+                f'{len(self._scanned_plants)} plant(s) seen so far.')
+
+        if self._startup_scan_accumulated_yaw >= 2 * math.pi - 0.1 or timed_out:
+            if not timed_out:
+                self.get_logger().info(
+                    f'360-degree scan complete. '
+                    f'Found {len(self._scanned_plants)} plants.')
             self.cmd_pub.publish(Twist())
+
+            if timed_out:
+                # The survey ended because odometry was not counting. Every
+                # plant position collected during the spin was worked out
+                # from that same frozen pose, so they are all wrong, and
+                # waypoint mode steers by odometry too. Fall back to the
+                # camera, which does not need odometry at all.
+                self._mode = 'searching'
+                self._search_ticks = 1
+                self._publish_status()
+                return
 
             if self._scanned_plants:
                 nearest_plant = None
@@ -774,7 +845,9 @@ class DetectionGoto(Node):
                     self._publish_status()
                     return
 
-            self.get_logger().warn('No plants found during 360-degree scan. Entering searching mode.')
+            self.get_logger().warn(
+                'No plants found during 360-degree scan. Entering searching '
+                'mode.')
             self._mode = 'searching'
             self._search_ticks = 1
 
@@ -900,9 +973,17 @@ class DetectionGoto(Node):
                 (self.target_class and cls == str(self.target_class).strip().lower()) or
                 cls in ('potted plant', 'plant', 'pot', 'crop')
             )
-            if is_target_class and z > self.auto_resume_min_dist:
+            # The minimum distance exists only to stop the robot re-picking
+            # the plant it has just inspected, which it is parked right in
+            # front of. Applying it always — as this did — meant a plant in
+            # plain view closer than auto_resume_min_dist never stopped the
+            # rotation, and the robot searched for ever. Gate it the same way
+            # _maybe_auto_track does: only just after an inspection.
+            if is_target_class and (not self._post_inspection_gate
+                                    or z > self.auto_resume_min_dist):
                 self.get_logger().info(
-                    f'found next plant ({cls}) at {z:.2f}m during rotation search — locking on!')
+                    f'found next plant ({cls}) at {z:.2f}m during rotation '
+                    f'search — locking on!')
                 self._search_ticks = 0
                 self._select_target(cls, d, auto=True)
                 return

@@ -1,8 +1,0 @@
-# Arm link lengths for the RosBridge's local IK reachability check — keep in
-# sync with ecobot_arm_control/config/arm_params.yaml.
-ecobot_voice_bridge:
-  ros__parameters:
-    l0: 0.110
-    l1: 0.150
-    l2: 0.130
-    l3: 0.140

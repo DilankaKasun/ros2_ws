@@ -290,6 +290,21 @@ class PlantMissionNode(Node):
         # Defensive reset — arm_scanner_node can also auto-start a scan
         # from /ecobot/detections; this guards against one still running.
         self._scanner_cmd_pub.publish(String(data=json.dumps({'action': 'stop'})))
+        # If nothing is subscribed to the scanner topic there is no arm
+        # scanner running, and the command goes nowhere. Say so now: the
+        # alternative is silence until whoever is waiting gives up, which
+        # reads as "the arm ignored us" rather than "the arm is not there".
+        if self._scanner_cmd_pub.get_subscription_count() == 0:
+            self.get_logger().error(
+                'no arm scanner is listening on the scanner command topic — '
+                'arm_scanner_node is not running. The scan cannot start. '
+                'Check for a stale launch still holding the arm.')
+            if self._current_result is not None:
+                self._current_result['scan_status'] = 'no arm scanner running'
+            self._error_msg = 'arm_scanner_node is not running'
+            self._finish_plant()
+            return
+
         cmd = {'action': 'scan', 'x': self._arm_scan_x,
                'y': self._arm_scan_y, 'z': self._arm_scan_z,
                'samples': self._scan_samples}

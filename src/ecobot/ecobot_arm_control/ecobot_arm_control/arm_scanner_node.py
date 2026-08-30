@@ -43,6 +43,11 @@ class ArmScannerNode(Node):
         self.declare_parameter('standoff_min', 0.06)
         self.declare_parameter('standoff_max', 0.26)
         self.declare_parameter('standoff_step', 0.02)
+        # How much of the arm's full extension to treat as usable. Fully
+        # extended the arm is at a singularity and every joint is on its
+        # limit, so aim solving fails there even though the geometry says
+        # it reaches.
+        self.declare_parameter('reach_margin', 0.85)
         self.declare_parameter('max_aim_error', 25.0)
         self.declare_parameter('sweep_top_offset', 0.20)
         self.declare_parameter('sweep_bottom_offset', -0.15)
@@ -116,6 +121,11 @@ class ArmScannerNode(Node):
         self._standoff_min = float(self.get_parameter('standoff_min').value)
         self._standoff_max = float(self.get_parameter('standoff_max').value)
         self._standoff_step = float(self.get_parameter('standoff_step').value)
+        self._reach_margin = float(self.get_parameter('reach_margin').value)
+        # The nominal framing distance the parameter asked for. The value in
+        # self._standoff is per-scan and may be larger — see _fit_standoff.
+        self._standoff_nominal = self._standoff
+        self._standoff_max_nominal = self._standoff_max
         self._max_aim_error = float(self.get_parameter('max_aim_error').value)
         self._sweep_top = float(self.get_parameter('sweep_top_offset').value)
         self._sweep_bottom = float(self.get_parameter('sweep_bottom_offset').value)
@@ -473,6 +483,39 @@ class ArmScannerNode(Node):
         self.get_logger().info(f'[Lock-On] Locked plant center: bearing={bearing_corrected:.1f}° (was {assumed_bearing:.1f}°), height={z_corrected:.2f}m (was {z:.2f}m)')
         return bearing_corrected, z_corrected
 
+    def _fit_standoff(self, r_plant):
+        """Choose a framing distance the arm can actually hold.
+
+        The arm reaches about 0.31m forward: its links span 0.35m from a
+        shoulder pivot that sits 0.04m BEHIND the base axis. The robot,
+        though, parks 0.65m from the plant, because the depth camera reads
+        nothing closer than 0.50m and a plant it cannot measure is a plant
+        it thinks it has lost.
+
+        So the wrist camera can never get the nominal 0.20m from the plant
+        — that would put it 0.50m out, far outside the workspace, and every
+        sampled viewpoint then fails to pose and the scan is abandoned
+        before it starts. What the arm CAN do is stand at the edge of its
+        reach and aim at the plant from further back. That is what this
+        works out: the smallest standoff that leaves the camera somewhere
+        the arm can hold.
+        """
+        usable = (self._ik.pivot_r + self._ik.span) * self._reach_margin
+        needed = r_plant - usable
+        if needed <= self._standoff_nominal:
+            # Close enough to frame properly; keep the asked-for distance.
+            self._standoff = self._standoff_nominal
+            self._standoff_max = self._standoff_max_nominal
+            return
+        self._standoff = needed
+        # The search in _solve_aim must be allowed to reach the new value.
+        self._standoff_max = max(self._standoff_max_nominal, needed + 0.06)
+        self.get_logger().info(
+            f'[Reach] plant is {r_plant:.2f}m out but the arm only reaches '
+            f'{usable:.2f}m — photographing it from {self._standoff:.2f}m '
+            'back instead of the usual '
+            f'{self._standoff_nominal:.2f}m')
+
     def _start_scan(self, x, y, z, plant_type='potted plant', plant_height=None, z_top=None, z_bottom=None, plant_width=None):
         if self._scanning:
             return
@@ -485,6 +528,10 @@ class ArmScannerNode(Node):
                 f'[Targeting Filter] Rejected scan command: Target position (x={x:.2f}m, y={y:.2f}m, dist={r:.2f}m) '
                 'is outside physical arm scanning range (0.15m - 0.85m)! Refusing to scan empty area.')
             return
+
+        # Pick a framing distance the arm can hold before any pose is
+        # solved: everything downstream places the camera at r - standoff.
+        self._fit_standoff(r)
 
         import sys
         if 'pytest' in sys.modules or 'unittest' in sys.modules:
@@ -991,6 +1038,17 @@ class ArmScannerNode(Node):
         part = str(self._latest_cv_data.get('detected_part', 'unknown'))
         focus_score = float(self._latest_cv_data.get('focus_score', 100.0))
 
+        # Read the clock before anything below uses it. This is a timer
+        # callback: an exception here is re-raised by the executor and
+        # takes the whole node down, so the arm simply vanished mid-scan
+        # and scan commands went to a topic nobody was listening on.
+        now = time.time()
+
+        # Cooldown between adjustments.
+        if getattr(self, '_reorient_last', 0.0) and \
+                (now - self._reorient_last) < 1.5:
+            return
+
         # A plant must actually be in view. The wrist detector decides that
         # when it has an opinion — colour masking alone calls a green wall
         # a plant, and a beige pot nothing.
@@ -999,12 +1057,6 @@ class ArmScannerNode(Node):
             if not bool(self._latest_cv_data.get('plant_present', False)):
                 return
         elif self._recentre_on_wrist(wrist, now):
-            return
-
-        # Cooldown between adjustments.
-        now = time.time()
-        if getattr(self, '_reorient_last', 0.0) and \
-                (now - self._reorient_last) < 1.5:
             return
 
         # Hard cap on consecutive adjustments — reset when the viewpoint moves
@@ -1131,7 +1183,14 @@ class ArmScannerNode(Node):
 
             # Active visual servoing check midway through dwell, only if the arm has arrived
             if self._at_viewpoint() and elapsed >= 0.5 * dwell_to_use:
-                self._adjust_active_reorientation()
+                try:
+                    self._adjust_active_reorientation()
+                except Exception as e:
+                    # Aiming is an improvement, not a requirement. Losing
+                    # the whole scanner because a correction went wrong
+                    # costs far more than skipping one correction.
+                    self.get_logger().warn(
+                        f'aim correction skipped: {e}')
 
             # Wait until the arm has actually arrived, then hold for the
             # dwell so the viewpoint capture is stable.

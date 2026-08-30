@@ -47,7 +47,38 @@ source ~/ros2_ws/install/setup.bash 2>/dev/null || true
 # this stack can start, not just the three names ecobot.launch.py used to run
 # directly, so a stale generation never lingers into the next run.
 ECOBOT_PROC_PATTERN="ros2_ws/install|ros2 launch ecobot_bringup|rosbridge_websocket|static_transform_publisher|lifecycle_manager|controller_server|planner_server|behavior_server|bt_navigator|depthimage_to_laserscan_node|robot_state_publisher|livekit_streamer"
-pkill -f "$ECOBOT_PROC_PATTERN" 2>/dev/null || true
+# SIGTERM first, then make sure. A wedged node can sit on SIGTERM for
+# ever: one arm_manual_node survived 83 minutes and several restarts this
+# way, holding I2C and port 9090 while fresh instances started alongside
+# it. Three generations then ran at once, the new arm_scanner_node died in
+# the contention, and scan commands went to a topic nobody was listening
+# on — the arm simply never moved, with nothing in the log to say why.
+ecobot_sweep() {
+  pkill -f "$ECOBOT_PROC_PATTERN" 2>/dev/null || true
+  for _ in 1 2 3 4 5; do
+    pgrep -f "$ECOBOT_PROC_PATTERN" >/dev/null 2>&1 || return 0
+    sleep 1
+  done
+  echo "  [cleanup] some nodes ignored the stop signal; forcing them out"
+  pkill -9 -f "$ECOBOT_PROC_PATTERN" 2>/dev/null || true
+  sleep 2
+}
+ecobot_sweep
+
+# Nothing below can work if the last generation still holds rosbridge's
+# port: the dashboard would talk to a stack that is no longer the one
+# driving the robot. Say so rather than starting on top of it.
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  ss -tln 2>/dev/null | grep -q ":9090 " || break
+  sleep 1
+done
+if ss -tln 2>/dev/null | grep -q ":9090 "; then
+  echo ""
+  echo "  ERROR: port 9090 is still held by an older run."
+  echo "  Find it with:  ss -tlnp | grep 9090"
+  echo "  Starting now would leave two stacks fighting over the robot."
+  exit 1
+fi
 
 # Services this script no longer starts (the 8080 static UI, the 3001 Next.js
 # server, the standalone WebRTC streamers) can still be running as orphans from

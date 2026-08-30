@@ -250,6 +250,11 @@ class PlantRunNode(Node):
         # a plant getting scanned. Reaching one resets the count, because
         # a survey that leads to a scan was not a wasted one.
         self.declare_parameter('max_surveys_without_progress', 2)
+        # A run is a patrol, not an errand: when it runs out of plants it
+        # goes back to looking rather than declaring itself finished. Only
+        # the operator ends it. Set false to make it stop once it has
+        # exhausted the look-round and explore budgets below.
+        self.declare_parameter('run_until_stopped', True)
 
         gp = self.get_parameter
         self._plant_classes = {str(c).strip().lower()
@@ -323,6 +328,8 @@ class PlantRunNode(Node):
         self._hold_still_when_idle = bool(gp('hold_still_when_idle').value)
         self._max_surveys = int(gp('max_surveys_without_progress').value)
         self._max_explore_legs = int(gp('max_explore_legs').value)
+        self._run_until_stopped = bool(gp('run_until_stopped').value)
+        self._cycles = 0
 
         # -- run state --------------------------------------------------
         self._state = 'IDLE'
@@ -656,6 +663,7 @@ class PlantRunNode(Node):
         self._target = None
         self._surveys_done = 0
         self._explore_legs = 0
+        self._cycles = 0
         self._nav_missing = False
         self._queue('SURVEY', 'starting the run — looking around for plants')
 
@@ -706,6 +714,35 @@ class PlantRunNode(Node):
         self._target = None
         self._drive(0.0, 0.0)
         self._queue('DONE', why)
+
+    def _out_of_plants(self, why):
+        """Nothing left to go to, and the look-round and explore budgets are
+        spent. Either start over or stop, depending on how the run is set."""
+        done = sum(1 for p in self._plants if p.state == 'done')
+        failed = sum(1 for p in self._plants if p.state == 'failed')
+        if not self._run_until_stopped:
+            say = f'run complete — {done} plant(s) scanned'
+            if failed:
+                say += f', {failed} could not be reached'
+            self._finish_run(say)
+            return
+        # Keep going. A plant that could not be reached from one corner of
+        # the room may be perfectly reachable from another, so the ones that
+        # failed go back in the pot; the ones already scanned stay out of it.
+        self._cycles += 1
+        retried = 0
+        for plant in self._plants:
+            if plant.state == 'failed':
+                plant.state = 'pending'
+                plant.reason = ''
+                retried += 1
+        self._surveys_done = 0
+        self._explore_legs = 0
+        self._queue('SURVEY',
+                    f'{why} — {done} scanned so far. Starting round '
+                    f'{self._cycles + 1}'
+                    + (f', retrying {retried} that got away' if retried else '')
+                    + '. This run keeps going until you stop it.')
 
     # ---- entering each state --------------------------------------------
 
@@ -781,15 +818,7 @@ class PlantRunNode(Node):
             self._queue('SURVEY',
                         'no plant left that I know of — looking round again')
             return
-        done = sum(1 for p in self._plants if p.state == 'done')
-        failed = sum(1 for p in self._plants if p.state == 'failed')
-        dup = sum(1 for p in self._plants if p.state == 'duplicate')
-        say = f'run complete — {done} plant(s) scanned'
-        if failed:
-            say += f', {failed} could not be reached'
-        if dup:
-            say += f', {dup} turned out to be one already done'
-        self._finish_run(say)
+        self._out_of_plants('nowhere left to look from here')
 
     # ---- looking at the chosen plant again -------------------------------
 
@@ -966,9 +995,9 @@ class PlantRunNode(Node):
                         f'{why} — no plant in sight from here, moving on '
                         'to look elsewhere')
             return
-        self._finish_run(
+        self._out_of_plants(
             f'no plants found after {why} and '
-            f'{self._explore_legs} push(es) into the room — nothing to do')
+            f'{self._explore_legs} push(es) into the room')
 
     # ---- the long drive, map driver -------------------------------------
 
@@ -1419,6 +1448,10 @@ class PlantRunNode(Node):
             'deadline_s': self._timeouts.get(self._state),
             'plants': [p.as_dict() for p in self._plants],
             'done': sum(1 for p in self._plants if p.state == 'done'),
+            # How many times the run has been round the room, and whether
+            # it will keep going when it runs out of plants.
+            'cycle': self._cycles + 1,
+            'until_stopped': self._run_until_stopped,
             'target': (self._target.as_dict() if self._target else None),
         }
         self._status_pub.publish(String(data=json.dumps(payload)))

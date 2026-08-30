@@ -509,6 +509,7 @@ class DetectionGoto(Node):
             if self._scanner_scanning or not self._scan_started:
                 return
             self._scan_done = True
+            self._scan_hold_until = None
 
     def _scanner_status_cb(self, msg):
         try:
@@ -528,12 +529,14 @@ class DetectionGoto(Node):
             self.get_logger().warn(
                 f'arm scan failed: {data.get("reason", "no reason given")}')
             self._scan_done = True
+            self._scan_hold_until = None
             return
         if status in ('idle', 'recovering'):
             # Only after the arm has been seen sweeping — this topic reads
             # idle in the gap before the scan begins as well.
             if self._scan_requested and self._scan_started:
                 self._scan_done = True
+                self._scan_hold_until = None
 
     def _trigger_arm_scan(self):
         """Hand off to ecobot_mission's plant_mission_node via its
@@ -825,7 +828,7 @@ class DetectionGoto(Node):
 
     def _scan_hold_pending(self):
         """True while a scan has been announced but has not finished."""
-        if self._scan_hold_until is None or self._scan_done:
+        if self._scan_hold_until is None:
             return False
         if self.get_clock().now() >= self._scan_hold_until:
             self._scan_hold_until = None

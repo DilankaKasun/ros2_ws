@@ -3,6 +3,7 @@ import math
 import threading
 import rclpy
 from rclpy.node import Node
+from rclpy.duration import Duration
 from rclpy.qos import QoSProfile, DurabilityPolicy, HistoryPolicy
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
@@ -96,6 +97,9 @@ class DetectionGoto(Node):
         # to finish before driving on anyway.
         self.declare_parameter('resume_track', True)
         self.declare_parameter('resume_timeout', 60.0)
+        # How long one scan announcement holds the base. Short, because the
+        # status republishes several times a second while a scan is live.
+        self.declare_parameter('scan_hold_grace', 3.0)
         # Minimum depth (m) for a plant to be auto-selected while idle.
         # After inspecting a plant the robot is parked 0.4m from it;
         # requiring a farther target keeps auto-resume from immediately
@@ -192,8 +196,20 @@ class DetectionGoto(Node):
         self.resume_track = bool(self.get_parameter('resume_track').value)
         self.resume_timeout = float(
             self.get_parameter('resume_timeout').value)
+        self.scan_hold_grace = float(
+            self.get_parameter('scan_hold_grace').value)
         self.auto_resume_min_dist = float(
             self.get_parameter('auto_resume_min_dist').value)
+        # Keep real separation between where the robot parks and how far a
+        # plant must be to count as a new one. With stop_distance at 0.65
+        # the default 0.8 leaves only 15cm, so depth noise alone could push
+        # the just-scanned plant back over the gate and it would re-pick
+        # the plant it just finished, forever.
+        self.auto_resume_min_dist = max(
+            self.auto_resume_min_dist, self.stop_distance + 0.5)
+        self.get_logger().info(
+            f'auto_resume_min_dist={self.auto_resume_min_dist:.2f}m '
+            f'(stop_distance={self.stop_distance:.2f}m)')
         self._scan_status_topic = str(
             self.get_parameter('plant_scan_status_topic').value)
         self._scanner_status_topic = str(
@@ -257,6 +273,11 @@ class DetectionGoto(Node):
         self._scan_done = False
         self._scan_requested = False
         self._scanner_scanning = False
+        # Deadline-based hold covering the gap between a scan being
+        # announced and the arm reporting that it is actually moving.
+        # Refreshed by every SCANNING/ANALYZING status, so it lapses on its
+        # own if the mission goes quiet rather than pinning the base.
+        self._scan_hold_until = None
         # True once the arm has actually been seen sweeping for this request.
         # Both status sources sit at a terminal/idle value in the gap between
         # asking for a scan and the arm starting one, so without this the very
@@ -425,6 +446,7 @@ class DetectionGoto(Node):
         self._on_track = False
         self._resume_pending = False
         self._scan_requested = False
+        self._scan_hold_until = None
         self._post_inspection_gate = False
         self._fz = None
         self._fang = None
@@ -471,7 +493,17 @@ class DetectionGoto(Node):
         # scanner also reports idle (see _scanner_status_cb).
         status = str(data.get('status', ''))
         if status in ('SCANNING', 'ANALYZING', 'ANALYSING', 'NAVIGATING'):
-            self._scan_started = True
+            # Deliberately does NOT set _scan_started. The mission node
+            # reports SCANNING as soon as it accepts the request, well
+            # before the arm moves; treating that as "started" let the
+            # scanner's pre-scan 'idle' heartbeat immediately count as
+            # "finished" and the robot drove off mid-sweep. It does hold
+            # the base though: the arm can begin moving a control tick
+            # before its own status arrives, and that tick was enough to
+            # leak one search-rotation command into the sweep.
+            self._scan_hold_until = (
+                self.get_clock().now()
+                + Duration(seconds=self.scan_hold_grace))
             return
         if status in ('COMPLETE', 'WAITING', 'IDLE', 'STOPPED', 'ERROR'):
             if self._scanner_scanning or not self._scan_started:
@@ -513,6 +545,8 @@ class DetectionGoto(Node):
         self._scan_done = False
         self._scan_requested = True
         self._scan_started = False
+        self._scan_hold_until = (
+            self.get_clock().now() + Duration(seconds=self.scan_hold_grace))
         self.plant_scan_cmd_pub.publish(
             String(data=json.dumps({'action': 'scan_here'})))
         self.get_logger().info(
@@ -747,7 +781,19 @@ class DetectionGoto(Node):
         self._publish_waypoints()
         self._update_map_pose()
         self.suppress_avoidance_pub.publish(
-            Bool(data=bool(self.active or self._parked_suppress)))
+            Bool(data=bool(self.active or self._parked_suppress
+                           or self._scanner_scanning
+                           or self._scan_hold_pending())))
+        # Unconditional hold while the arm is mid-sweep. Every other guard
+        # here is a state machine that can be raced into the wrong branch;
+        # this one reads the arm's own live status, so no ordering of
+        # mission/scanner messages can drive the base while it is moving.
+        if self._scanner_scanning or self._scan_hold_pending():
+            self.cmd_pub.publish(Twist())
+            self._prev_lin = 0.0
+            self._prev_ang = 0.0
+            self._publish_status()
+            return
         if not self.active:
             self._maybe_auto_track()
             if not self.active:
@@ -776,6 +822,15 @@ class DetectionGoto(Node):
             self._control_startup_scan(now)
         else:
             self._stop('IDLE')
+
+    def _scan_hold_pending(self):
+        """True while a scan has been announced but has not finished."""
+        if self._scan_hold_until is None or self._scan_done:
+            return False
+        if self.get_clock().now() >= self._scan_hold_until:
+            self._scan_hold_until = None
+            return False
+        return True
 
     def _handle_resume_pending(self):
         """After a plant was inspected, wait for the arm scan to finish,
@@ -917,7 +972,14 @@ class DetectionGoto(Node):
         _, _, current_yaw = self._current_pose()
         delta_yaw = current_yaw - self._blind_start_yaw
         delta_yaw = math.atan2(math.sin(delta_yaw), math.cos(delta_yaw))
-        current_heading_err = self._blind_heading - delta_yaw
+        # _blind_heading is a camera-frame bearing (atan2(x, z): positive
+        # means the plant is to the RIGHT), while delta_yaw is odom yaw
+        # (positive means the robot turned LEFT). Turning right to face a
+        # right-hand plant makes delta_yaw negative, so the remaining
+        # bearing is heading + delta_yaw. Subtracting instead made the
+        # error grow every tick: the robot spun ~180 degrees past the
+        # plant and timed out rather than arriving.
+        current_heading_err = self._blind_heading + delta_yaw
         current_heading_err = math.atan2(math.sin(current_heading_err), math.cos(current_heading_err))
         heading_err = abs(current_heading_err)
 

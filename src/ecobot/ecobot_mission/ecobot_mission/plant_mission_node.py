@@ -585,9 +585,13 @@ class PlantMissionNode(Node):
             epoch, idx, result = pending
             if epoch == self._epoch and self._status == 'ANALYZING':
                 if self._current_result is not None:
-                    self._current_result['health'] = result['health']
-                    self._current_result['confidence'] = result['confidence']
-                    self._current_result['notes'] = result['notes']
+                    # Carry the whole assessment through, not just the
+                    # headline. The report page shows identification,
+                    # symptoms, treatments and species facts, and anything
+                    # dropped here is simply missing from it.
+                    for key, value in result.items():
+                        if key != 'error' and value not in (None, [], {}):
+                            self._current_result[key] = value
                     if not self._current_result.get('scan_status'):
                         self._current_result['scan_status'] = (
                             'gemini_error' if result.get('error') else 'ok')

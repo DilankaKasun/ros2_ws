@@ -23,20 +23,61 @@ from google.genai import types
 
 logger = logging.getLogger('ecobot_mission.gemini_client')
 
-PROMPT = """You are a plant-health inspection assistant reviewing close-up
-photos taken by a robot's wrist camera of one plant, from multiple
-viewpoints (labelled front/right/left/top where available).
+PROMPT = """You are a plant inspection assistant reviewing close-up photos
+taken by a robot's wrist camera of ONE plant, from several viewpoints.
 
-Assess the plant's visible health and respond with ONLY a single JSON
-object, no prose, no markdown fences, matching exactly this schema:
+Report only what you can actually support. This matters more than
+completeness: the report is read as fact, and a confident guess about a
+plant someone is caring for is worse than a gap. So:
+
+  * Omit any field you are not reasonably sure of. Leave it out of the
+    JSON entirely rather than guessing, writing "unknown", or filling it
+    with a plausible-sounding value.
+  * Species facts (life span, sizes, growth rate, temperature, water)
+    should only be given once you are confident of the identification. If
+    you are not sure what the plant is, omit the whole species_data and
+    mature_size sections.
+  * Anything you can see in the photos — colour, condition, structure —
+    you may report from the photos alone.
+  * Never invent a measurement of THIS plant that the photos cannot show.
+
+Respond with ONLY a single JSON object, no prose, no markdown fences.
+Include only the keys you are confident about; every one is optional
+except health, confidence and notes:
+
 {
   "health": "healthy" | "stressed" | "diseased" | "dead" | "unknown",
   "confidence": <float 0.0-1.0>,
-  "issues": [<short strings, e.g. "yellowing leaves", "wilting", "pest damage">],
-  "notes": "<one or two sentence plain-English summary>"
+  "issues": [<short strings, e.g. "yellowing leaves", "pest damage">],
+  "notes": "<one or two sentence plain-English summary>",
+
+  "identification": {
+    "common_name": "", "scientific_name": "", "family": "",
+    "confidence_rating": "high" | "medium" | "low"
+  },
+  "visible_condition": {
+    "overall_health": "", "leaf_colour_and_condition": "",
+    "stem_and_foliage_structure": ""
+  },
+  "symptoms": [<what is visibly wrong, one short phrase each>],
+  "treatments": [<practical steps for the symptoms above>],
+  "species_data": {
+    "life_span": "", "average_height": "", "average_diameter": "",
+    "average_girth": "", "seed_size": "", "growth_rate": "",
+    "optimal_temperature": "", "water_need": ""
+  },
+  "mature_size": {
+    "height_range_and_progress": "", "diameter_progress": "",
+    "life_cycle_timeline": ""
+  },
+  "habitat": {
+    "climate_or_zones": "", "indoor_potted_context": ""
+  }
 }
-If the images do not clearly show a plant, or are too blurry/dark to
-assess, use "health": "unknown" and explain why in "notes"."""
+
+If the photos do not clearly show a plant, or are too blurry or dark to
+judge, set health to "unknown", say why in notes, and omit everything
+else."""
 
 _JSON_OBJECT_RE = re.compile(r'\{.*\}', re.DOTALL)
 
@@ -78,7 +119,11 @@ class GeminiClient:
                     contents=types.Content(role='user', parts=parts),
                     config=types.GenerateContentConfig(
                         temperature=0.2,
-                        max_output_tokens=512,
+                        # The full report — identification, condition,
+                        # symptoms, treatments, species facts — does not
+                        # fit in 512, and a truncated reply parses as a
+                        # failure rather than a partial answer.
+                        max_output_tokens=2048,
                         response_mime_type='application/json',
                         http_options=types.HttpOptions(
                             timeout=int(self._timeout_s * 1000)),
@@ -162,13 +207,41 @@ class GeminiClient:
             except Exception:
                 return self._degraded(f'unparseable response: {text[:200]}')
 
-        return {
+        result = {
             'health': str(data.get('health', 'unknown')),
             'confidence': float(data.get('confidence', 0.0)),
             'issues': list(data.get('issues', [])),
             'notes': str(data.get('notes', '')),
             'error': None,
         }
+
+        # The optional sections. Anything the model left out, or filled
+        # with an empty string or a placeholder, is dropped rather than
+        # carried through — a report is easier to trust when a missing
+        # fact is visibly missing instead of showing as "unknown".
+        placeholder = {'', 'unknown', 'n/a', 'na', 'none', 'not sure',
+                       'not applicable', '-'}
+
+        def clean(value):
+            if isinstance(value, dict):
+                out = {k: clean(v) for k, v in value.items()}
+                out = {k: v for k, v in out.items() if v not in (None, {}, [])}
+                return out or None
+            if isinstance(value, list):
+                out = [clean(v) for v in value]
+                out = [v for v in out if v not in (None, {}, [])]
+                return out or None
+            if value is None:
+                return None
+            text = str(value).strip()
+            return None if text.lower() in placeholder else text
+
+        for key in ('identification', 'visible_condition', 'species_data',
+                    'mature_size', 'habitat', 'symptoms', 'treatments'):
+            section = clean(data.get(key))
+            if section:
+                result[key] = section
+        return result
 
     def _degraded(self, reason):
         return {

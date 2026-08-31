@@ -113,6 +113,32 @@ class ArmScannerNode(Node):
         # calculated to be; this checks where it actually appears.
         self.declare_parameter('centre_before_capture', True)
         self.declare_parameter('centre_max_tries', 8)
+        # One sweep at the start of a scan to find where the plant really
+        # is, before any viewpoint is planned.
+        #
+        # OFF by default because it does not work yet, and saying so is
+        # better than costing twenty seconds a scan for nothing. It sweeps
+        # the AIM POINT around a fixed assumed distance, so when that
+        # distance is wrong — which is the case it exists to rescue —
+        # every trial looks straight past the plant. Measured on the robot:
+        # seven spots posed correctly, the plant seen at none of them,
+        # while a sweep of the arm's own JOINT angles found it at once.
+        # Finishing this means sweeping base and wrist angles and mapping
+        # the best one back to a bearing; until then the scan is aimed by
+        # the measured position and corrected by the centring loop, which
+        # does work.
+        self.declare_parameter('search_sweep', False)
+        # Wide enough to actually find the plant. The position handed over
+        # is measured from a body camera half a metre away and a good way
+        # off to one side of the arm, so the plant routinely sits 25 or 30
+        # degrees from where the arm was told to look — a narrow sweep
+        # simply misses it and the scan proceeds aimed at nothing.
+        self.declare_parameter(
+            'search_bearings_deg',
+            [-40.0, -27.0, -13.0, 0.0, 13.0, 27.0, 40.0])
+        self.declare_parameter(
+            'search_heights_m', [-0.12, -0.06, 0.0, 0.06, 0.12])
+        self.declare_parameter('search_settle_s', 0.55)
         self.declare_parameter('scanning_peak_speed', 15.0)
         self.declare_parameter('scanning_accel', 30.0)
         self.declare_parameter('normal_peak_speed', 40.0)
@@ -224,6 +250,13 @@ class ArmScannerNode(Node):
         self._centre_max_tries = int(
             self.get_parameter('centre_max_tries').value)
         self._centre_tries = 0
+        self._search_sweep = bool(self.get_parameter('search_sweep').value)
+        self._search_bearings = [
+            float(b) for b in self.get_parameter('search_bearings_deg').value]
+        self._search_heights = [
+            float(h) for h in self.get_parameter('search_heights_m').value]
+        self._search_settle = float(
+            self.get_parameter('search_settle_s').value)
         self._lock_img_w = int(self.get_parameter('wrist_image_width').value)
         self._lock_img_h = int(self.get_parameter('wrist_image_height').value)
         self._wrist_plant = None      # newest plant box, or None
@@ -396,6 +429,137 @@ class ArmScannerNode(Node):
                 return best, best_err
 
         return (best, best_err) if best is not None else None
+
+    def _look_at(self, r, bearing_deg, height, settle=None):
+        """Point the wrist camera at one trial spot and report what it sees.
+
+        Returns the wrist detection found there, or None. Used by the
+        opening sweep, so it deliberately does not care whether the pose is
+        the ideal framing distance — only whether the plant is visible from
+        it.
+        """
+        rad = math.radians(bearing_deg)
+        ax, ay = r * math.cos(rad), r * math.sin(rad)
+
+        # Try a few camera distances. A trial spot is about WHERE TO LOOK,
+        # not about ideal framing, so losing one because the preferred
+        # distance happens to be out of reach would blind the sweep for no
+        # good reason.
+        solved = None
+        for so in (self._standoff, self._standoff - 0.06,
+                   self._standoff + 0.06, self._standoff - 0.12):
+            if so <= 0.03:
+                continue
+            solved = self._solve_aim((r - so) * math.cos(rad),
+                                     (r - so) * math.sin(rad), height,
+                                     ax, ay, height)
+            if solved is not None:
+                break
+        if solved is None:
+            self.get_logger().info(
+                f'[Sweep] cannot pose a look at {bearing_deg:+.0f} deg, '
+                f'{height:.2f}m — skipping that spot')
+            return None
+
+        angles, _ = solved
+        msg = Float64MultiArray()
+        msg.data = [float(a) for a in angles]
+        self._joint_pub.publish(msg)
+        self._vp_target_angles = [float(a) for a in angles]
+
+        deadline = time.time() + 3.0
+        while time.time() < deadline and not self._at_viewpoint(tol=2.0):
+            time.sleep(0.05)
+
+        # Forget whatever was seen from the LAST spot before believing
+        # anything about this one — a detection is only evidence about the
+        # place the camera was pointing when it was taken.
+        self._wrist_plant = None
+        self._wrist_plant_time = 0.0
+        wait = settle if settle is not None else self._search_settle
+        # The wrist detector runs at a couple of frames a second, so give
+        # it long enough to produce one rather than reading before it has.
+        deadline = time.time() + max(wait, 1.2)
+        while time.time() < deadline:
+            if self._wrist_plant is not None:
+                break
+            time.sleep(0.05)
+        if self._wrist_plant is None:
+            self.get_logger().info(
+                f'[Sweep] looked at {bearing_deg:+.0f} deg, {height:.2f}m '
+                '— no plant there')
+        return self._wrist_plant
+
+    def _sweep_for_plant(self, x, y, z):
+        """Sweep once across, then once up and down, to find where the plant
+        actually is before any viewpoint is planned.
+
+        The position handed over by the driver comes from the body camera
+        half a metre away and is only ever approximate — and every later
+        viewpoint is built from it, so an error there is an error in all of
+        them. One sweep with the camera that will do the photographing
+        settles it: whichever trial spot puts the plant biggest and most
+        central in frame is the direction the plant is really in.
+
+        Returns a corrected (bearing_deg, height). Falls back to whatever it
+        was given when nothing is seen — better an approximate aim than no
+        scan at all.
+        """
+        r = math.hypot(x, y)
+        base_bearing = math.degrees(math.atan2(y, x))
+
+        def score(hit):
+            # Prefer the biggest, most central sighting: a plant at the edge
+            # of frame is one the arm is only half looking at.
+            return hit['area'] * (1.0 - 0.5 * min(1.0, abs(hit['centroid_x'])))
+
+        # --- across ---
+        best_b, best_hit = base_bearing, None
+        looked = 0
+        for off in self._search_bearings:
+            hit = self._look_at(r, base_bearing + off, z)
+            if hit is not None:
+                looked += 1
+                if best_hit is None or score(hit) > score(best_hit):
+                    best_hit, best_b = hit, base_bearing + off
+        if best_hit is None:
+            self.get_logger().warning(
+                f'[Sweep] swept {len(self._search_bearings)} spots across and '
+                'saw no plant — keeping the position the driver gave')
+            return base_bearing, z
+        self.get_logger().info(
+            f'[Sweep] saw the plant from {looked} of '
+            f'{len(self._search_bearings)} spots across')
+        self.get_logger().info(
+            f'[Sweep] across: plant best seen at {best_b:+.0f} deg '
+            f'(offset {best_b - base_bearing:+.0f})')
+
+        # --- up and down, at the bearing that worked ---
+        best_h, best_hit_v = z, None
+        for dh in self._search_heights:
+            hit = self._look_at(r, best_b, z + dh)
+            if hit is not None and (best_hit_v is None
+                                    or score(hit) > score(best_hit_v)):
+                best_hit_v, best_h = hit, z + dh
+        if best_hit_v is None:
+            best_hit_v, best_h = best_hit, z
+        self.get_logger().info(
+            f'[Sweep] up/down: plant best seen at {best_h:.2f}m '
+            f'(offset {best_h - z:+.2f}m)')
+
+        # --- fine correction from where it sat in that last picture ---
+        dx = float(best_hit_v.get('centroid_x', 0.0))
+        dy = float(best_hit_v.get('centroid_y', 0.0))
+        bearing = best_b - math.degrees(
+            math.atan(dx * math.tan(math.radians(self._lock_hfov / 2.0))))
+        height = best_h - math.tan(
+            math.radians(dy * self._lock_vfov / 2.0)) * self._standoff
+        self.get_logger().info(
+            f'[Sweep] found the plant at {bearing:+.0f} deg, {height:.2f}m up '
+            f'— every viewpoint from here aims there '
+            f'(moved {bearing - base_bearing:+.0f} deg, '
+            f'{height - z:+.2f}m from what the driver gave)')
+        return bearing, height
 
     def _lock_onto_plant(self, x, y, z):
         """Perform closed-loop visual servoing using the wrist camera to lock onto the center of the plant.
@@ -599,8 +763,14 @@ class ArmScannerNode(Node):
     def _execute_scan_sequence(self, x, y, z, plant_type='potted plant', plant_height=None, z_top=None, z_bottom=None, plant_width=None):
         self._parts_covered.clear()
 
-        # Perform visual servoing to lock camera onto plant center
-        bearing_locked, z_locked = self._lock_onto_plant(x, y, z)
+        # Find the plant before planning anything around it. The sweep
+        # looks with the camera that will take the photographs; the older
+        # lock-on nudged outward from an assumed centre, which only works
+        # when that assumption was already close.
+        if self._search_sweep:
+            bearing_locked, z_locked = self._sweep_for_plant(x, y, z)
+        else:
+            bearing_locked, z_locked = self._lock_onto_plant(x, y, z)
 
         # Update x, y, z to the locked ones
         r = math.sqrt(x ** 2 + y ** 2)

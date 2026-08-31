@@ -145,6 +145,13 @@ class PlantRunNode(Node):
         # plant it cannot measure is a plant it thinks it has lost.
         self.declare_parameter('min_depth_range_m', 0.5)
         self.declare_parameter('park_tolerance_m', 0.07)
+        # After parking at the depth camera's limit, ease in this much
+        # further on the wheels alone. The camera cannot measure inside
+        # 0.50m, so this last stretch is blind: it is deliberately slow,
+        # dead straight, and bounded by distance AND by time, because
+        # nothing is watching to say the robot has gone too far.
+        self.declare_parameter('creep_distance_m', 0.15)
+        self.declare_parameter('creep_speed', 0.04)
         self.declare_parameter('park_bearing_tol_rad', 0.09)
         # Two sightings this close in direction and distance are the
         # same plant seen twice, not two plants.
@@ -190,6 +197,7 @@ class PlantRunNode(Node):
         self.declare_parameter('explore_leg_s', 12.0)
         self.declare_parameter('max_explore_legs', 6)
         # How long the arm has to actually start moving after being asked.
+        self.declare_parameter('creep_timeout_s', 20.0)
         self.declare_parameter('scan_start_timeout_s', 25.0)
         self.declare_parameter('nav_server_wait_s', 5.0)
         # How long the camera driver keeps going on the last bearing it
@@ -280,6 +288,8 @@ class PlantRunNode(Node):
                 f'{self._min_depth}m) — using {fixed}m instead')
             self._park_dist = fixed
         self._park_tol = float(gp('park_tolerance_m').value)
+        self._creep_distance = float(gp('creep_distance_m').value)
+        self._creep_speed = abs(float(gp('creep_speed').value))
         self._park_bearing_tol = float(gp('park_bearing_tol_rad').value)
         self._merge_heading = float(gp('merge_heading_rad').value)
         self._merge_range = float(gp('merge_range_m').value)
@@ -306,6 +316,7 @@ class PlantRunNode(Node):
             'DRIVE': float(gp('drive_timeout_s').value),
             'HANDOVER': float(gp('handover_timeout_s').value),
             'APPROACH': float(gp('approach_timeout_s').value),
+            'CREEP': float(gp('creep_timeout_s').value),
             'SCAN': float(gp('scan_timeout_s').value),
             'REPORT': float(gp('report_timeout_s').value),
             'TURN_AWAY': float(gp('turn_away_timeout_s').value),
@@ -371,6 +382,10 @@ class PlantRunNode(Node):
         self._turn_away_last_yaw = None
 
         self._odom_yaw = None
+        self._odom_xy = None
+        self._creep_from = None       # where the final nudge started
+        self._crept = 0.0             # how far it actually got
+        self._parked_range = None     # measured range before going blind
         self._detections = []
         self._detections_time = 0.0
 
@@ -442,6 +457,7 @@ class PlantRunNode(Node):
 
     def _on_odom(self, msg):
         self._odom_yaw = _yaw_from_quat(msg.pose.pose.orientation)
+        self._odom_xy = (msg.pose.pose.position.x, msg.pose.pose.position.y)
 
     def _on_nav_vel(self, msg):
         # Only the ARRIVAL of a message matters, not what is in it: the
@@ -626,11 +642,25 @@ class PlantRunNode(Node):
 
     _DRIVERS = {
         'SURVEY': 'camera', 'REACQUIRE': 'camera', 'APPROACH': 'camera',
-        'TURN_AWAY': 'camera', 'EXPLORE': 'camera',
+        'CREEP': 'camera', 'TURN_AWAY': 'camera', 'EXPLORE': 'camera',
         'DRIVE': 'map', 'HANDOVER': 'handover',
     }
 
+    def _stop_arm(self, why):
+        """Tell the arm to stop sweeping.
+
+        Skipping a plant used to leave the arm mid-scan: the base drove off
+        to the next one while the arm carried on photographing empty air,
+        because nothing ever told it the plant it was looking at had been
+        abandoned."""
+        self.get_logger().info(f'stopping the arm scan — {why}')
+        self._send_scan_cmd({'action': 'stop'})
+
     def _enter(self, state, say):
+        # Anything that ends a scan early — skipped, given up on, timed out,
+        # stopped — has to take the arm with it.
+        if self._state in ('SCAN', 'REPORT') and state not in ('SCAN', 'REPORT'):
+            self._stop_arm(say)
         self._state = state
         self._state_since = time.time()
         self._driver = self._DRIVERS.get(state, 'none')
@@ -679,6 +709,10 @@ class PlantRunNode(Node):
     def _queue_skip(self, why):
         if not self._run_active:
             return
+        if self._state in ('SCAN', 'REPORT'):
+            # Say it now rather than on the next tick: the arm is moving
+            # this instant and the operator has just asked it to stop.
+            self._stop_arm(why)
         self._mark_target('failed', why)
         self._queue('TURN_AWAY', why)
 
@@ -774,6 +808,9 @@ class PlantRunNode(Node):
             self._last_range = None
         elif state == 'APPROACH':
             self._last_seen_time = 0.0
+        elif state == 'CREEP':
+            self._creep_from = None
+            self._crept = 0.0
         elif state == 'SCAN':
             self._scan_seen_running = False
             self._scan_finished = False
@@ -1232,8 +1269,15 @@ class PlantRunNode(Node):
                          'parking distance — easing back')
         elif error <= self._park_tol and centred:
             self._drive(0.0, 0.0)
-            self._queue('SCAN',
-                        f'parked {rng:.2f}m out and square on to the plant')
+            self._parked_range = rng
+            if self._creep_distance > 0.0:
+                self._queue('CREEP',
+                            f'parked {rng:.2f}m out and square on — easing '
+                            f'{self._creep_distance * 100:.0f}cm closer for '
+                            'the arm')
+            else:
+                self._queue('SCAN',
+                            f'parked {rng:.2f}m out and square on to the plant')
             return
         elif abs(bearing) > 3.0 * self._park_bearing_tol:
             # Well off centre: turn on the spot. The camera only sees a 57
@@ -1298,6 +1342,11 @@ class PlantRunNode(Node):
         """
         det = self._last_det
         rng = self._last_range
+        if rng is not None and self._crept > 0.0:
+            # The last measurement was taken before easing in, so the plant
+            # is that much closer now. Handing the arm the stale number
+            # would aim it past the plant by exactly the distance crept.
+            rng = max(0.05, rng - self._crept)
         if det is None or rng is None:
             self.get_logger().warning(
                 'no measurement of the plant to give the arm — it will use '
@@ -1338,6 +1387,59 @@ class PlantRunNode(Node):
             f'{geo["z"]:.2f}m up, '
             f'{geo.get("plant_height", 0.0):.2f}m tall')
         return geo
+
+    def _tick_creep(self):
+        """Ease closer than the depth camera can see.
+
+        The base parks at the nearest distance the camera can still measure,
+        but that leaves the plant most of a metre from an arm that reaches
+        about a third of one. Closing the last stretch is the difference
+        between the wrist camera framing the plant and squinting at it.
+
+        Nothing is watching during this. Inside the camera's blind zone
+        there is no range to steer by, so the robot goes dead straight, at
+        a crawl, and stops on measured distance or on the clock, whichever
+        comes first. It never turns here: a turn with no way to check it is
+        how the robot ends up beside the plant instead of in front of it.
+        """
+        if self._odom_xy is None:
+            self._drive(0.0, 0.0)
+            self._say = 'waiting for a wheel reading before easing in'
+            if self._deadline_passed():
+                self._queue('SCAN', 'no wheel reading to ease in by — '
+                                    'scanning from here')
+            return
+
+        if self._creep_from is None:
+            self._creep_from = self._odom_xy
+
+        self._crept = math.hypot(self._odom_xy[0] - self._creep_from[0],
+                                 self._odom_xy[1] - self._creep_from[1])
+        parked = self._parked_range if self._parked_range else 0.0
+
+        if self._crept >= self._creep_distance - 0.005:
+            self._drive(0.0, 0.0)
+            self._queue('SCAN',
+                        f'eased {self._crept * 100:.0f}cm in — about '
+                        f'{max(0.0, parked - self._crept):.2f}m from the '
+                        'plant now')
+            return
+
+        if self._deadline_passed():
+            # However far it got is where it scans from. Stopping short is
+            # not a failure: the arm aims at wherever the plant now is.
+            self._drive(0.0, 0.0)
+            self._queue('SCAN',
+                        f'ran out of time easing in, got '
+                        f'{self._crept * 100:.0f}cm of '
+                        f'{self._creep_distance * 100:.0f}cm — scanning '
+                        'from here')
+            return
+
+        self._drive(self._creep_speed, 0.0)
+        self._say = (f'easing in slowly — {self._crept * 100:.0f}cm of '
+                     f'{self._creep_distance * 100:.0f}cm, no camera to '
+                     'steer by here')
 
     def _tick_scan(self):
         # Dead still. A zero every tick, not silence: silence lets the
@@ -1409,11 +1511,12 @@ class PlantRunNode(Node):
         # scan, where the thing filling the view is the goal rather than a
         # hazard. Everywhere else it stays fully on.
         self._suppress_pub.publish(Bool(
-            data=self._state in ('APPROACH', 'SCAN', 'REPORT')))
+            data=self._state in ('APPROACH', 'CREEP', 'SCAN', 'REPORT')))
 
         handler = {
             'SURVEY': self._tick_survey,
             'EXPLORE': self._tick_explore,
+            'CREEP': self._tick_creep,
             'PICK': self._tick_pick,
             'REACQUIRE': self._tick_reacquire,
             'DRIVE': self._tick_drive,

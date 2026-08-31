@@ -63,7 +63,22 @@ class PlantMissionNode(Node):
         # Once the arm says it has stopped, how long to let the camera
         # settle before the shutter. Only exposure and the last of the
         # wobble — the arm is already still, so this is short.
-        self.declare_parameter('settle_delay_s', 0.4)
+        # The arm is long, so it keeps swaying after the joints report they
+        # have arrived. Photographing before it has stopped is what
+        # produced the blurred shots. arm_scanner_node's dwell_time has to
+        # exceed this, or the arm moves on before the shutter fires.
+        self.declare_parameter('settle_delay_s', 3.0)
+        # Only photograph what actually has a plant in it. The wrist
+        # detector says whether one is in frame; without this the sweep
+        # dutifully photographed empty room whenever a viewpoint pointed
+        # somewhere the plant was not.
+        self.declare_parameter('require_plant_in_frame', True)
+        self.declare_parameter('wrist_detections_topic', '/arm/detections')
+        self.declare_parameter('wrist_plant_classes',
+                               ['potted plant', 'plant', 'vase', 'pot'])
+        self.declare_parameter('wrist_plant_confidence', 0.35)
+        # How stale a wrist detection may be and still count as "now".
+        self.declare_parameter('wrist_plant_max_age_s', 2.0)
         self.declare_parameter('frame_max_age_s', 2.0)
         # A scan is over when the ARM says so. These two only catch an arm
         # that has stopped talking altogether. The old single 20s budget
@@ -85,6 +100,14 @@ class PlantMissionNode(Node):
         self._paused_from = None
         self._capture_delay_s = float(gp('capture_delay_s').value)
         self._settle_delay_s = float(gp('settle_delay_s').value)
+        self._require_plant = bool(gp('require_plant_in_frame').value)
+        self._wrist_classes = {str(c).strip().lower()
+                               for c in gp('wrist_plant_classes').value}
+        self._wrist_conf = float(gp('wrist_plant_confidence').value)
+        self._wrist_max_age = float(gp('wrist_plant_max_age_s').value)
+        self._wrist_plant_time = 0.0
+        self._wrist_plant_name = ''
+        self._skipped_empty = 0
         self._frame_max_age_s = float(gp('frame_max_age_s').value)
         self._scan_silence_timeout_s = float(gp('scan_silence_timeout_s').value)
         self._scan_hard_timeout_s = float(gp('scan_hard_timeout_s').value)
@@ -149,6 +172,10 @@ class PlantMissionNode(Node):
         self.create_subscription(
             Image, str(gp('wrist_camera_topic').value),
             self._on_wrist_frame, 10)
+
+        self.create_subscription(
+            String, str(gp('wrist_detections_topic').value),
+            self._on_wrist_detections, 10)
 
         self.create_timer(0.1, self._tick)
 
@@ -283,6 +310,7 @@ class PlantMissionNode(Node):
                     if (data or {}).get(k) is not None}
         self._last_geometry = geometry
         self._current_captures = []
+        self._skipped_empty = 0
         self._scan_start_time = self.get_clock().now()
         self._last_scanner_msg_time = None
         self._captured_viewpoint = None
@@ -372,6 +400,9 @@ class PlantMissionNode(Node):
             self._current_result['captures'] = len(self._current_captures)
             self._current_result['scan_status'] = (
                 'ok' if self._current_captures else 'no_captures')
+            if self._skipped_empty:
+                self._current_result['skipped_empty_views'] = \
+                    self._skipped_empty
             if self._last_scanner_status and 'parts_covered' in self._last_scanner_status:
                 self._current_result['parts_covered'] = self._last_scanner_status['parts_covered']
 
@@ -414,6 +445,41 @@ class PlantMissionNode(Node):
             self._wrist_frame = frame
             self._wrist_frame_stamp = time.time()
 
+    def _on_wrist_detections(self, msg):
+        """Remember when the wrist camera last had a plant in frame."""
+        try:
+            dets = json.loads(msg.data)
+        except Exception:
+            return
+        if not isinstance(dets, list):
+            return
+        for det in dets:
+            if not isinstance(det, dict):
+                continue
+            name = str(det.get('class_name', '')).strip().lower()
+            if name not in self._wrist_classes:
+                continue
+            try:
+                if float(det.get('confidence') or 0.0) < self._wrist_conf:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            self._wrist_plant_time = time.time()
+            self._wrist_plant_name = name
+            return
+
+    def _plant_in_frame(self):
+        """Whether the wrist camera can see a plant right now.
+
+        None means the detector is not running at all, which is different
+        from "no plant": with no detector there is no evidence either way,
+        and refusing to photograph on that basis would silently produce a
+        scan with no pictures.
+        """
+        if self._wrist_plant_time == 0.0:
+            return None
+        return (time.time() - self._wrist_plant_time) <= self._wrist_max_age
+
     def _get_wrist_jpeg(self):
         with self._wrist_lock:
             frame = self._wrist_frame
@@ -424,6 +490,17 @@ class PlantMissionNode(Node):
         return buf.tobytes() if ok else None
 
     def _do_capture(self, label):
+        seen = self._plant_in_frame()
+        if self._require_plant and seen is False:
+            self._skipped_empty += 1
+            self.get_logger().info(
+                f'skipping viewpoint "{label}" — no plant in the wrist '
+                'camera, so there is nothing worth photographing here')
+            return
+        if self._require_plant and seen is None:
+            self.get_logger().warning(
+                'no wrist detector running, so there is no way to tell '
+                'whether the plant is in frame — photographing anyway')
         jpeg = self._get_wrist_jpeg()
         if jpeg is None:
             self.get_logger().warning(

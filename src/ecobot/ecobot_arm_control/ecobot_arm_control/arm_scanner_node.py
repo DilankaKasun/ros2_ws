@@ -61,7 +61,14 @@ class ArmScannerNode(Node):
         # Fallback box width when the detector does not report one.
         self.declare_parameter('plant_width', 0.30)
         self.declare_parameter('aim_height', 'center')  # 'center' | 'path'
-        self.declare_parameter('dwell_time', 1.2)
+        # How long the arm holds a viewpoint AFTER arriving. This has to
+        # comfortably exceed plant_mission_node's settle_delay_s, or the
+        # shutter fires after the arm has already moved on.
+        self.declare_parameter('dwell_time', 4.5)
+        # Travel steps are not photographed, so they hold only long enough
+        # to keep the motion smooth. Giving them the full photo dwell added
+        # half a minute of standing still per scan for no pictures.
+        self.declare_parameter('transit_dwell_time', 0.3)
         self.declare_parameter('l0', 0.300)
         self.declare_parameter('l1', 0.165)
         self.declare_parameter('l2', 0.135)
@@ -88,15 +95,24 @@ class ArmScannerNode(Node):
         self.declare_parameter('wrist_image_height', 480)
         # How hard to pull the aim back onto a plant the wrist detector can
         # see off-centre, and how far off-centre is worth correcting.
-        self.declare_parameter('wrist_recentre_gain', 0.6)
+        self.declare_parameter('wrist_recentre_gain', 0.8)
         self.declare_parameter('wrist_recentre_tol', 0.12)
-        self.declare_parameter('wrist_recentre_max_deg', 6.0)
-        # Which way the wrist joint pitches to look further down. The
-        # horizontal correction's sign is fixed by the lock-on geometry,
-        # but this one is not established anywhere in the arm's own code,
-        # so it is a parameter: if the arm corrects the wrong way
-        # vertically, set this to -1.0 and it is fixed with no rebuild.
-        self.declare_parameter('wrist_pitch_sign', 1.0)
+        # A plant at the edge of the picture is about 35 degrees off. Capped
+        # at 6 the arm could never get there: it crept a few degrees per try
+        # and ran out of tries still looking past the plant.
+        self.declare_parameter('wrist_recentre_max_deg', 20.0)
+        # Which way the wrist joint pitches to look further down. Measured
+        # on the robot: with +1 the vertical offset grew instead of
+        # shrinking — a plant 0.55 low went to 0.78 low over three
+        # corrections while the horizontal converged — so the joint pitches
+        # the other way to what the horizontal geometry would suggest.
+        self.declare_parameter('wrist_pitch_sign', -1.0)
+        # Before each photograph, nudge the arm until the plant's box sits
+        # near the middle of the wrist picture. Aiming by geometry alone
+        # only ever gets the camera pointed at where the plant was
+        # calculated to be; this checks where it actually appears.
+        self.declare_parameter('centre_before_capture', True)
+        self.declare_parameter('centre_max_tries', 8)
         self.declare_parameter('scanning_peak_speed', 15.0)
         self.declare_parameter('scanning_accel', 30.0)
         self.declare_parameter('normal_peak_speed', 40.0)
@@ -138,6 +154,8 @@ class ArmScannerNode(Node):
         self._plant_width = float(self.get_parameter('plant_width').value)
         self._aim_height = str(self.get_parameter('aim_height').value).strip().lower()
         self._dwell_time = float(self.get_parameter('dwell_time').value)
+        self._transit_dwell = float(
+            self.get_parameter('transit_dwell_time').value)
         self._enable_detection_auto_scan = bool(
             self.get_parameter('enable_detection_auto_scan').value)
         self._scanning_peak_speed = float(self.get_parameter('scanning_peak_speed').value)
@@ -158,10 +176,14 @@ class ArmScannerNode(Node):
         # servo_angles) where (s) is the camera standoff pose, (a) the aim
         # point, and servo_angles the pre-solved aimed joint command.
         self._scan_queue = []
+        self._scan_starting = False
         self._current_viewpoint = 0
         # Whether the arm has announced that it reached the current
-        # viewpoint and stopped. Photographs wait for this.
+        # viewpoint and stopped, and when. Photographs wait for this, and
+        # the dwell is held from it.
         self._settled_announced = False
+        self._settled_at = None
+        self._centre_tries = 0
         self._scanning = False
         self._dwell_start = None
         self._parts_covered = set()
@@ -197,6 +219,11 @@ class ArmScannerNode(Node):
             self.get_parameter('wrist_recentre_max_deg').value)
         self._wrist_pitch_sign = float(
             self.get_parameter('wrist_pitch_sign').value)
+        self._centre_before_capture = bool(
+            self.get_parameter('centre_before_capture').value)
+        self._centre_max_tries = int(
+            self.get_parameter('centre_max_tries').value)
+        self._centre_tries = 0
         self._lock_img_w = int(self.get_parameter('wrist_image_width').value)
         self._lock_img_h = int(self.get_parameter('wrist_image_height').value)
         self._wrist_plant = None      # newest plant box, or None
@@ -517,8 +544,17 @@ class ArmScannerNode(Node):
             f'{self._standoff_nominal:.2f}m')
 
     def _start_scan(self, x, y, z, plant_type='potted plant', plant_height=None, z_top=None, z_bottom=None, plant_width=None):
-        if self._scanning:
+        # _scanning is not set until the sequence has finished planning, so
+        # it cannot keep a second command out on its own. Two commands
+        # arriving close together spawned two planning threads that shared
+        # one queue: one rebuilt it into its finished form while the other
+        # was still reading it as raw samples, and the reader died on the
+        # mismatch — taking the whole scanner with it.
+        if self._scanning or self._scan_starting:
+            self.get_logger().warning(
+                'ignoring scan command: a scan is already starting or running')
             return
+        self._scan_starting = True
 
         r = math.sqrt(x ** 2 + y ** 2)
         
@@ -527,6 +563,7 @@ class ArmScannerNode(Node):
             self.get_logger().warn(
                 f'[Targeting Filter] Rejected scan command: Target position (x={x:.2f}m, y={y:.2f}m, dist={r:.2f}m) '
                 'is outside physical arm scanning range (0.15m - 0.85m)! Refusing to scan empty area.')
+            self._scan_starting = False
             return
 
         # Pick a framing distance the arm can hold before any pose is
@@ -535,17 +572,29 @@ class ArmScannerNode(Node):
 
         import sys
         if 'pytest' in sys.modules or 'unittest' in sys.modules:
-            self._execute_scan_sequence(x, y, z, plant_type, plant_height, z_top, z_bottom, plant_width)
+            try:
+                self._execute_scan_sequence(x, y, z, plant_type, plant_height, z_top, z_bottom, plant_width)
+            finally:
+                self._scan_starting = False
             return
 
         import threading
         self.get_logger().info('[Thread Dispatcher] Spawning asynchronous background thread for lock-on and plant scanning sequence.')
-        threading.Thread(
-            target=self._execute_scan_sequence,
-            args=(x, y, z, plant_type, plant_height, z_top, z_bottom,
-                  plant_width),
-            daemon=True
-        ).start()
+
+        def _run():
+            try:
+                self._execute_scan_sequence(
+                    x, y, z, plant_type, plant_height, z_top, z_bottom,
+                    plant_width)
+            except Exception as e:
+                # A planning fault must not leave the scanner permanently
+                # refusing new work, nor take the node down with it.
+                self.get_logger().error(f'scan planning failed: {e}')
+                self._pub_status('failed', reason=f'scan planning failed: {e}')
+            finally:
+                self._scan_starting = False
+
+        threading.Thread(target=_run, daemon=True).start()
 
     def _execute_scan_sequence(self, x, y, z, plant_type='potted plant', plant_height=None, z_top=None, z_bottom=None, plant_width=None):
         self._parts_covered.clear()
@@ -631,10 +680,23 @@ class ArmScannerNode(Node):
             f'standoff, aiming inside a {half_w * 200:.0f}cm-wide box '
             f'(bearing {base_bearing:.1f} deg, seed {seed})')
 
-        for i in range(n):
+        # Sample until there are n viewpoints the arm can actually hold,
+        # rather than sampling n and discarding whatever cannot be posed.
+        # At any distance the top of the arc is out of reach, so asking for
+        # six shots used to yield two — the other four were sampled high,
+        # found unreachable, and simply dropped. When a run of samples
+        # fails, the ceiling comes down so sampling concentrates where the
+        # arm can actually go.
+        elev_hi = self._arc_elev_max
+        attempts = 0
+        max_attempts = max(30, n * 15)
+        fails = 0
+        while len(self._scan_queue) < n and attempts < max_attempts:
+            attempts += 1
+            i = len(self._scan_queue)
             # Position on the arc: elevation above the plant's centre, with a
             # little bearing jitter so repeated runs do not retrace one line.
-            elev = rng.uniform(self._arc_elev_min, self._arc_elev_max)
+            elev = rng.uniform(self._arc_elev_min, elev_hi)
             bearing = base_bearing + rng.uniform(-az_span, az_span)
             rad = math.radians(bearing)
             er = math.radians(elev)
@@ -663,8 +725,23 @@ class ArmScannerNode(Node):
             else:
                 feature = 'base_pot'
 
+            # Check it here, while there is still a chance to sample
+            # another one, instead of filtering the whole path afterwards.
+            if self._solve_aim(sx, sy, cam_h, ax, ay, aim_h) is None:
+                fails += 1
+                if fails >= 4 and elev_hi > self._arc_elev_min + 5.0:
+                    elev_hi = max(self._arc_elev_min + 5.0, elev_hi - 10.0)
+                    fails = 0
+                continue
+            fails = 0
             label = f'v{i + 1:02d}_{feature}_elev{elev:+.0f}_h{aim_h * 1000:.0f}'
             self._scan_queue.append((label, sx, sy, cam_h, ax, ay, aim_h))
+
+        if len(self._scan_queue) < n:
+            self.get_logger().warning(
+                f'could only place {len(self._scan_queue)} of {n} viewpoints '
+                f'in {attempts} tries — the plant is near the edge of what '
+                'the arm can hold, so this scan has fewer shots')
 
         if not self._scan_queue:
             self.get_logger().warn('Empty scan path')
@@ -756,7 +833,7 @@ class ArmScannerNode(Node):
                 label = f"aimed_transition_step_{i}"
                 transition.append(
                     (label, t_sx, t_sy, t_sz, t_ax, t_ay, t_az,
-                     t_angles, t_err, self._dwell_time))
+                     t_angles, t_err, self._transit_dwell))
 
         self.get_logger().info(
             f'[Trajectory Planner] Defined aimed transition ({len(transition)} '
@@ -765,7 +842,7 @@ class ArmScannerNode(Node):
         # 3. Combine them all into self._scan_queue
         self._scan_queue = []
         # Prepend the starting pose as a short hold so it transitions smoothly
-        self._scan_queue.append(("above_plant_start", cx, cy, cz, x, y, z, above_pose, start_aim_err, self._dwell_time))
+        self._scan_queue.append(("above_plant_start", cx, cy, cz, x, y, z, above_pose, start_aim_err, self._transit_dwell))
         # Add Aimed Transition
         self._scan_queue.extend(transition)
         # Add Detailed Component Scan
@@ -872,6 +949,7 @@ class ArmScannerNode(Node):
             self._current_joints = list(msg.data[:NUM_JOINTS])
 
     def _stop_scan(self):
+        self._scan_starting = False
         self._scanning = False
         self._scan_queue = []
         self._current_viewpoint = 0
@@ -886,6 +964,8 @@ class ArmScannerNode(Node):
         # A new move means the arm is travelling again, so it is no longer
         # settled until it says so.
         self._settled_announced = False
+        self._settled_at = None
+        self._centre_tries = 0
         if vp_idx >= len(self._scan_queue):
             self.get_logger().info('Scan complete')
             self._stop_scan()
@@ -1084,6 +1164,53 @@ class ArmScannerNode(Node):
                 f'[Active Re-Orientation] Adjusted Wrist ({adj_angles[3]:.1f}°) & Base ({adj_angles[0]:.1f}°) '
                 f'-> Restoring Optimal Visibility (Focus: {focus_score:.1f}, Part: {part})')
 
+    def _centre_plant_in_frame(self, now):
+        """Nudge the arm until the plant's box sits near the middle of the
+        wrist picture. Returns True when a correction was issued, meaning
+        the arm is moving again and is not ready to be photographed.
+
+        Aiming by geometry alone only ever points the camera at where the
+        plant was calculated to be. Every step of that sum — the plant's
+        measured position, the arm's link lengths, the servo calibration —
+        carries error, and they add up at the end of a half-metre reach.
+        This closes the loop on what the camera can actually see: if the
+        plant is off to one side of the picture, the arm moves until it is
+        not.
+        """
+        if not self._centre_before_capture:
+            return False
+        wrist = self._wrist_plant_now()
+        if wrist is None:
+            # Nothing detected. There is nothing to centre on, and the
+            # photographer's own check will decide whether to take the
+            # shot — this is not the place to guess.
+            return False
+
+        dx = float(wrist.get('centroid_x', 0.0))
+        dy = float(wrist.get('centroid_y', 0.0))
+        off = max(abs(dx), abs(dy))
+        if off <= self._wrist_tol:
+            if self._centre_tries:
+                self.get_logger().info(
+                    f'[Centre] plant centred after {self._centre_tries} '
+                    f'nudge(s) — off by ({dx:+.2f}, {dy:+.2f})')
+            return False
+
+        if self._centre_tries >= self._centre_max_tries:
+            self.get_logger().warning(
+                f'[Centre] gave up centring after {self._centre_tries} '
+                f'tries, plant still ({dx:+.2f}, {dy:+.2f}) off centre — '
+                'photographing it where it is')
+            return False
+
+        self._centre_tries += 1
+        moved = self._recentre_on_wrist(wrist, now)
+        if moved:
+            self.get_logger().info(
+                f'[Centre] try {self._centre_tries}: plant '
+                f'({dx:+.2f}, {dy:+.2f}) off centre, nudging')
+        return moved
+
     def _recentre_on_wrist(self, wrist, now):
         """Pull the aim back onto a plant the wrist camera can see but is
         not centred on. Returns True when an adjustment was made.
@@ -1178,11 +1305,25 @@ class ArmScannerNode(Node):
             # capture timed from that landed mid-travel and came out
             # blurred every time.
             if self._at_viewpoint() and not self._settled_announced:
+                # Put the plant in the middle of the picture before saying
+                # the arm is ready to be photographed. A correction moves
+                # the arm, so it is no longer settled — come back when it
+                # has arrived again.
+                if self._centre_plant_in_frame(now):
+                    return
                 self._settled_announced = True
+                self._settled_at = now
                 self._pub_status('scanning', vp_idx, settled=True)
 
             # Active visual servoing check midway through dwell, only if the arm has arrived
-            if self._at_viewpoint() and elapsed >= 0.5 * dwell_to_use:
+            # Only when centring is off. With it on, the plant was already
+            # put in the middle of the picture BEFORE the arm was declared
+            # settled, and the photograph is timed from that moment — so
+            # moving the arm again here would blur the very shot the
+            # centring was for.
+            if (not self._centre_before_capture
+                    and self._at_viewpoint()
+                    and elapsed >= 0.5 * dwell_to_use):
                 try:
                     self._adjust_active_reorientation()
                 except Exception as e:
@@ -1192,9 +1333,15 @@ class ArmScannerNode(Node):
                     self.get_logger().warn(
                         f'aim correction skipped: {e}')
 
-            # Wait until the arm has actually arrived, then hold for the
-            # dwell so the viewpoint capture is stable.
-            if not self._at_viewpoint() or elapsed < dwell_to_use:
+            # Hold for the dwell measured from ARRIVAL, not from when the
+            # move was ordered. Timed from the order, a long move ate the
+            # whole dwell and the arm moved on the instant it arrived — so
+            # it never actually stood still, and the photographs blurred
+            # however long the photographer waited.
+            settled_for = (
+                (now - self._settled_at).nanoseconds * 1e-9
+                if self._settled_at is not None else 0.0)
+            if not self._at_viewpoint() or settled_for < dwell_to_use:
                 return
             self._current_viewpoint += 1
             self._dwell_start = None

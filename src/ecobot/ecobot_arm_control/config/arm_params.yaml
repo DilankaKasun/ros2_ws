@@ -36,7 +36,13 @@ arm_scanner_node:
     aim_height: path
 
     # Hold time per viewpoint for image capture and focus analysis
-    dwell_time: 1.2
+    # How long the arm holds a viewpoint AFTER it has arrived and stopped.
+    # Must comfortably exceed plant_mission_node's settle_delay_s (3.0s), or
+    # the shutter fires after the arm has already moved on.
+    dwell_time: 4.5
+    # Travel steps between photo viewpoints: short, since nothing is
+    # photographed there.
+    transit_dwell_time: 0.3
 
     l0: 0.300
     l1: 0.165

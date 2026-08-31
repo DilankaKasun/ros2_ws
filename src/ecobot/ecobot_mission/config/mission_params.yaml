@@ -21,6 +21,14 @@ plant_mission_node:
     # -- capture timing --
     capture_delay_s: 1.2
     frame_max_age_s: 2.0
+    # The arm is long and keeps swaying after its joints report they have
+    # arrived, so the shutter waits this long after it says it settled.
+    # arm_scanner_node's dwell_time must exceed this or the arm moves off
+    # before the picture is taken.
+    settle_delay_s: 3.0
+    # Only photograph viewpoints where the wrist camera can actually see a
+    # plant. Set false to photograph every viewpoint regardless.
+    require_plant_in_frame: true
     # A scan ends when the ARM says it has ended. These two only catch an
     # arm that has gone quiet or plainly hung — they never cut a sweep
     # that is still reporting progress.

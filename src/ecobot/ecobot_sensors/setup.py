@@ -36,6 +36,11 @@ setup(
             'scan_filter_node = ecobot_sensors.scan_filter_node:main',
             'livekit_streamer = ecobot_sensors.livekit_streamer:main',
             'livekit_bridge = ecobot_sensors.livekit_bridge:main',
+            'camera_webserver = ecobot_sensors.camera_webserver:main',
+            'webrtc_streamer = ecobot_sensors.webrtc_streamer:main',
+            'yolo_tracker = ecobot_sensors.yolo_tracker:main',
+            'map_pinner = ecobot_sensors.map_pinner:main',
         ],
     },
 )
+

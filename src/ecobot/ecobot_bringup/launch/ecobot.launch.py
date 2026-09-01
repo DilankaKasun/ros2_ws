@@ -15,19 +15,31 @@ def generate_launch_description():
     sensors_launch = os.path.join(
         get_package_share_directory('ecobot_sensors'),
         'launch', 'sensors.launch.py')
-    teleop_launch = os.path.join(
-        get_package_share_directory('ecobot_teleop'),
-        'launch', 'teleop.launch.py')
     nav_launch = os.path.join(
         get_package_share_directory('ecobot_navigation'),
         'launch', 'navigation.launch.py')
-    dash_launch = os.path.join(
-        get_package_share_directory('ecobot_dashboard'),
-        'launch', 'dashboard.launch.py')
+    localization_launch = os.path.join(
+        get_package_share_directory('ecobot_bringup'),
+        'launch', 'localization.launch.py')
 
     depth_to_scan_launch = os.path.join(
         get_package_share_directory('ecobot_sensors'),
         'launch', 'depth_to_scan.launch.py')
+
+    mapping_launch = os.path.join(
+        get_package_share_directory('ecobot_bringup'),
+        'launch', 'rtabmap_mapping.launch.py')
+
+    arm_launch = os.path.join(
+        get_package_share_directory('ecobot_arm_control'),
+        'launch', 'arm_control.launch.py')
+
+    mission_launch = os.path.join(
+        get_package_share_directory('ecobot_mission'),
+        'launch', 'mission.launch.py')
+
+    nav_share = get_package_share_directory('ecobot_navigation')
+    default_map = os.path.join(nav_share, 'maps', 'default_map.yaml')
 
     return LaunchDescription([
         IncludeLaunchDescription(
@@ -42,7 +54,15 @@ def generate_launch_description():
                 'enable_obstacle_avoidance': PythonExpression([
                     '"', LaunchConfiguration('enable_obstacle_avoidance', default='false'),
                     '" == "true" or "', LaunchConfiguration('enable_navigation', default='false'),
+                    '" == "true" or "', LaunchConfiguration('enable_localization', default='false'),
                     '" == "true"']),
+                # A plant run cannot see a plant without the detector, so
+                # turning navigation on turns it on too.
+                'enable_detection': PythonExpression([
+                    '"', LaunchConfiguration('enable_detection', default='false'),
+                    '" == "true" or "', LaunchConfiguration('enable_navigation', default='false'),
+                    '" == "true"']),
+                'enable_livekit': LaunchConfiguration('enable_livekit', default='true'),
             }.items(),
             condition=IfCondition(
                 LaunchConfiguration('enable_sensors', default='true')),
@@ -53,26 +73,57 @@ def generate_launch_description():
                 LaunchConfiguration('enable_sensors', default='true')),
         ),
         IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(teleop_launch),
+            PythonLaunchDescriptionSource(mapping_launch),
+            launch_arguments={
+                'visual_odometry': 'false',
+                'database_path': '/home/ecobot/map_data/rtabmap.db',
+            }.items(),
             condition=IfCondition(
-                LaunchConfiguration('enable_teleop', default='false')),
+                LaunchConfiguration('enable_mapping', default='false')),
         ),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(nav_launch),
-            condition=IfCondition(
-                LaunchConfiguration('enable_navigation', default='false')),
-        ),
-        Node(
-            package='ecobot_bringup',
-            executable='cmd_vel_mux',
-            name='cmd_vel_mux',
+            launch_arguments={
+                'map': LaunchConfiguration('map', default=''),
+            }.items(),
             condition=IfCondition(
                 LaunchConfiguration('enable_navigation', default='false')),
         ),
         IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(dash_launch),
+            PythonLaunchDescriptionSource(localization_launch),
+            launch_arguments={
+                'scan_matcher': LaunchConfiguration('scan_matcher', default='slam_toolbox'),
+                'map': LaunchConfiguration('map', default=default_map),
+                # depth_to_scan is already started above under enable_sensors;
+                # including it again here would double-launch it.
+                'enable_depth_to_scan': PythonExpression([
+                    '"false" if "', LaunchConfiguration('enable_sensors', default='true'),
+                    '" == "true" else "true"']),
+            }.items(),
             condition=IfCondition(
-                LaunchConfiguration('enable_dashboard', default='true')),
+                LaunchConfiguration('enable_localization', default='false')),
+        ),
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(arm_launch),
+            launch_arguments={
+                'i2c_bus': LaunchConfiguration('arm_i2c_bus', default='7'),
+                'pca9685_address': LaunchConfiguration(
+                    'arm_pca9685_address', default='0x40'),
+                'enable_minicpm_vla': LaunchConfiguration('enable_minicpm_vla', default='false'),
+                'enable_openvla': LaunchConfiguration('enable_openvla', default='false'),
+                'vla_prompt': LaunchConfiguration('vla_prompt', default='reach forward'),
+                'vla_dry_run': LaunchConfiguration('vla_dry_run', default='false'),
+            }.items(),
+            condition=IfCondition(
+                LaunchConfiguration('enable_arm', default='true')),
+        ),
+        # plant_mission_node drives the scan-and-report pipeline. It was
+        # never included here, so the dashboard's scan commands went to a
+        # topic nothing was listening on and nothing happened.
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(mission_launch),
+            condition=IfCondition(
+                LaunchConfiguration('enable_mission', default='true')),
         ),
         Node(
             package='robot_state_publisher',
@@ -81,11 +132,29 @@ def generate_launch_description():
             condition=IfCondition(
                 LaunchConfiguration('enable_urdf', default='false')),
         ),
+        Node(
+            package='ecobot_bringup',
+            executable='hardware_diagnostic_node',
+            name='hardware_diagnostic_node',
+            parameters=[{
+                'check_interval': 5.0,
+                'i2c_bus': 7,
+                'pca9685_address': 0x40,
+                'motor_serial_port': LaunchConfiguration('serial_port', default='/dev/ttyACM0'),
+            }],
+            condition=IfCondition(
+                LaunchConfiguration('enable_diagnostics', default='true')),
+            output='screen',
+        ),
         ExecuteProcess(
-            cmd=['ros2', 'run', 'rosbridge_server', 'rosbridge_websocket', '--port', '9090'],
+            cmd=['ros2', 'run', 'rosbridge_server', 'rosbridge_websocket',
+                 '--port', '9090', '--ros-args',
+                 '-p', 'default_call_service_timeout:=5.0',
+                 '-p', 'call_services_in_new_thread:=true',
+                 '-p', 'send_action_goals_in_new_thread:=true'],
             name='rosbridge_websocket',
             condition=IfCondition(
-                LaunchConfiguration('enable_rosbridge', default='false')),
+                LaunchConfiguration('enable_rosbridge', default='true')),
             shell=True,
         ),
     ])

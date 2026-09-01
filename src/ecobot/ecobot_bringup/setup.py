@@ -13,9 +13,9 @@ setup(
         (f'share/{package_name}', ['package.xml']),
         (f'share/{package_name}/launch', glob('launch/*.launch.py')),
         (f'share/{package_name}/config', glob('config/*.yaml')),
-        (f'share/{package_name}/scripts', ['scripts/start.sh']),
+        (f'share/{package_name}/scripts', ['scripts/start.sh', 'scripts/hardware_check']),
     ],
-    scripts=['scripts/start.sh'],
+    scripts=['scripts/start.sh', 'scripts/hardware_check'],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='ecobot',
@@ -25,8 +25,9 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'cmd_vel_mux = ecobot_bringup.cmd_vel_mux:main',
             'send_goal = ecobot_bringup.send_goal:main',
+            'hardware_check = ecobot_bringup.hardware_check:main',
+            'hardware_diagnostic_node = ecobot_bringup.hardware_diagnostic_node:main',
         ],
     },
 )

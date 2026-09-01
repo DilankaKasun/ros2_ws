@@ -1,0 +1,57 @@
+arm_scanner_node:
+  ros__parameters:
+    # Crop & Plant Scanning Configuration
+    # Ideal standoff distance from camera to plant foliage/stem: 0.20m
+    standoff: 0.20
+    standoff_min: 0.08
+    standoff_max: 0.28
+    standoff_step: 0.02
+    max_aim_error: 40.0
+
+    # Top-to-bottom sweep range: from pot base / soil (-0.18m) up to top canopy (+0.25m)
+    sweep_top_offset: 0.25
+    sweep_bottom_offset: -0.18
+    sweep_steps: 8
+
+    # Sampled arc scan. The camera rides an arc at a fixed standoff from the
+    # plant, from level with it (0 deg) up to looking down on it (75 deg), and
+    # aims at a point picked at random inside the detected box. The dashboard
+    # can override scan_samples per run.
+    scan_samples: 6
+    arc_elev_min: 0.0
+    arc_elev_max: 75.0
+    plant_width: 0.30
+
+    # Kept for the older orbit path; unused by the sampled scan.
+    orbit_angles: [-35.0, 0.0, 35.0]
+
+    # Wrist Camera Lock-On Centering Parameters
+    lock_hfov: 73.3
+    lock_vfov: 58.3
+    lock_tolerance: 0.05
+    lock_max_iters: 6
+    lock_z_max_adjust: 0.08
+
+    # 'path' keeps wrist camera pointed level at each crop section (leaves, stem, base)
+    aim_height: path
+
+    # Hold time per viewpoint for image capture and focus analysis
+    # How long the arm holds a viewpoint AFTER it has arrived and stopped.
+    # Must comfortably exceed plant_mission_node's settle_delay_s (3.0s), or
+    # the shutter fires after the arm has already moved on.
+    dwell_time: 4.5
+    # Travel steps between photo viewpoints: short, since nothing is
+    # photographed there.
+    transit_dwell_time: 0.3
+
+    l0: 0.300
+    l1: 0.165
+    l2: 0.135
+    l3: 0.050
+    enable_detection_auto_scan: false
+
+    # Smooth Scan Velocity/Acceleration limits
+    scanning_peak_speed: 15.0
+    scanning_accel: 30.0
+    normal_peak_speed: 40.0
+    normal_accel: 90.0

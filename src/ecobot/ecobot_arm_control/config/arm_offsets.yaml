@@ -1,0 +1,20 @@
+# Per-joint hardware calibration overrides, loaded at arm node startup.
+#
+# IMPORTANT: the arm currently aims the camera at the ground and swings
+# aimlessly because the kinematic model does NOT match the physical arm —
+# the angle_offset / servo_range below are still unchecked defaults (0) for
+# shoulder, elbow, wrist. Measure the real rest/aim of each servo and fill
+# these in; a wrong offset makes every scan pose point the wrong way.
+#
+# angle_offset: servo angle that points that link straight ahead (arm IK
+#               frame). to_servo() adds it, to_ik() subtracts it.
+# min_angle/max_angle: hardware joint limits the arm is allowed to command.
+# servo_range: the servo's full mechanical travel spanned by pulse_min.max.
+# home_angle:  safe stow position driven to on startup.
+#
+# ADD A JOINT-BLOCK PER SERVO THAT NEEDS TUNING; the node only overrides the
+# keys present here. Delete the file or empty it to use servo_config.py defaults.
+arm_offsets:
+  ros__parameters:
+    # overrides: a JSON object mapping joint name -> {field: value}
+    overrides: '{}'

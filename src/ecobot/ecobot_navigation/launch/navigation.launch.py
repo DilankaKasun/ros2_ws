@@ -1,59 +1,54 @@
-from launch import LaunchDescription
-from launch.conditions import IfCondition
-from launch_ros.actions import Node
-from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration, PythonExpression
-from ament_index_python.packages import get_package_share_directory
+"""The map driver (Nav2, mapless) plus the run node that owns the wheels.
+
+Mapless: Nav2 plans in the robot's own wheel frame against a rolling
+picture of obstacles built from the depth camera. Nothing has to be
+recorded in advance, and the drifting frame does not matter because the
+map driver only has to finish roughly 1.2m short of the plant — the
+camera driver does the precise part.
+"""
 import os
+
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    nav2_params = os.path.join(
-        get_package_share_directory('ecobot_navigation'),
-        'config', 'nav2_params.yaml')
+    nav_share = get_package_share_directory('ecobot_navigation')
+    params_file = os.path.join(nav_share, 'config', 'nav2_params_mapless.yaml')
+
+    lifecycle_nodes = ['controller_server', 'planner_server',
+                       'behavior_server', 'bt_navigator']
 
     return LaunchDescription([
-        DeclareLaunchArgument('autostart', default_value='true'),
-        DeclareLaunchArgument('params_file', default_value=nav2_params),
+        DeclareLaunchArgument('enable_run_node', default_value='true'),
+        # Kept so callers that still pass map:=... do not fail. This stack
+        # is mapless; a recorded map is not used here.
         DeclareLaunchArgument('map', default_value=''),
 
+        # Mapless means nothing else writes map->odom, so a fixed identity
+        # keeps the frame tree connected for anything that asks for 'map'.
         Node(
-            package='nav2_map_server',
-            executable='map_server',
-            name='map_server',
+            package='tf2_ros',
+            executable='static_transform_publisher',
+            name='map_to_odom_tf',
+            arguments=['--x', '0', '--y', '0', '--z', '0',
+                       '--qx', '0', '--qy', '0', '--qz', '0', '--qw', '1',
+                       '--frame-id', 'map', '--child-frame-id', 'odom'],
             output='screen',
-            parameters=[LaunchConfiguration('params_file')],
-            condition=IfCondition(PythonExpression(
-                ['"', LaunchConfiguration('map'), '" != ""'])),
-        ),
-        Node(
-            package='nav2_amcl',
-            executable='amcl',
-            name='amcl',
-            output='screen',
-            parameters=[LaunchConfiguration('params_file')],
-        ),
-        Node(
-            package='nav2_lifecycle_manager',
-            executable='lifecycle_manager',
-            name='lifecycle_manager_navigation',
-            output='screen',
-            parameters=[{
-                'autostart': LaunchConfiguration('autostart'),
-                'node_names': PythonExpression([
-                    '["amcl", "controller_server", "planner_server", '
-                    '"behavior_server", "bt_navigator", "local_costmap", '
-                    '"global_costmap"] + (["map_server"] if "',
-                    LaunchConfiguration('map'), '" != "" else [])',
-                ]),
-            }],
         ),
         Node(
             package='nav2_controller',
             executable='controller_server',
             name='controller_server',
             output='screen',
-            parameters=[LaunchConfiguration('params_file')],
+            parameters=[params_file],
+            # The safety layer, not Nav2, is what finally writes /cmd_vel.
+            # It picks whichever driver is still publishing, which is how
+            # the handover works.
             remappings=[('/cmd_vel', '/nav_cmd_vel')],
         ),
         Node(
@@ -61,34 +56,45 @@ def generate_launch_description():
             executable='planner_server',
             name='planner_server',
             output='screen',
-            parameters=[LaunchConfiguration('params_file')],
+            parameters=[params_file],
         ),
         Node(
             package='nav2_behaviors',
             executable='behavior_server',
             name='behavior_server',
             output='screen',
-            parameters=[LaunchConfiguration('params_file')],
+            parameters=[params_file],
+            # Nav2's recovery behaviours (spin, back up, drive on heading)
+            # publish their own velocities, and without this they go
+            # STRAIGHT to /cmd_vel — past the obstacle layer, and past the
+            # handover, so the robot could spin or reverse unchecked while
+            # this stack believed the map driver had let go. A recovery is
+            # the map driver moving the robot, so it belongs on the map
+            # driver's topic like everything else it does.
+            remappings=[('/cmd_vel', '/nav_cmd_vel')],
         ),
         Node(
             package='nav2_bt_navigator',
             executable='bt_navigator',
             name='bt_navigator',
             output='screen',
-            parameters=[LaunchConfiguration('params_file')],
+            parameters=[params_file],
         ),
         Node(
-            package='nav2_costmap_2d',
-            executable='nav2_costmap_2d',
-            name='local_costmap',
+            package='nav2_lifecycle_manager',
+            executable='lifecycle_manager',
+            name='lifecycle_manager_navigation',
             output='screen',
-            parameters=[LaunchConfiguration('params_file')],
+            parameters=[{
+                'autostart': True,
+                'node_names': lifecycle_nodes,
+            }],
         ),
         Node(
-            package='nav2_costmap_2d',
-            executable='nav2_costmap_2d',
-            name='global_costmap',
+            package='ecobot_navigation',
+            executable='plant_run_node',
+            name='plant_run_node',
             output='screen',
-            parameters=[LaunchConfiguration('params_file')],
+            condition=IfCondition(LaunchConfiguration('enable_run_node')),
         ),
     ])

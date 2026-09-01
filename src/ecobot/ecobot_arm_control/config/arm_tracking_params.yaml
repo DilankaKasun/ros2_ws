@@ -1,0 +1,19 @@
+arm_target_tracker:
+  ros__parameters:
+    target_classes: ["bottle", "cup"]
+    standoff: 0.10
+    control_rate: 5.0
+    lost_timeout: 2.0
+    dry_run: false
+    # Static camera<->arm transform (arm IK frame), produced by
+    # `ros2 run ecobot_arm_control arm_camera_calibrate`.
+    transform_tx: 0.0
+    transform_ty: 0.0
+    transform_tz: 0.0
+    transform_yaw: 0.0
+    l0: 0.300
+    l1: 0.165
+    l2: 0.135
+    l3: 0.050
+    sweep_step: 0.02
+    sweep_max: 0.15

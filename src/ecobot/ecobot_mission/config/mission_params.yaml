@@ -1,0 +1,42 @@
+plant_mission_node:
+  ros__parameters:
+    # This node scans, photographs and reports. It does not drive:
+    # ecobot_navigation's plant_run_node owns the wheels and asks for a
+    # scan once it has parked the robot.
+
+    # -- topics --
+    plant_scan_cmd_topic: /ecobot/plant_scan_cmd
+    plant_scan_status_topic: /ecobot/plant_scan_status
+    scan_capture_topic: /ecobot/scan_capture
+    scanner_cmd_topic: /arm/scanner_cmd
+    scanner_status_topic: /arm/scanner_status
+    wrist_camera_topic: /arm/camera/image_raw
+
+    # -- where the arm aims when it sweeps --
+    arm_scan_x: 0.30
+    arm_scan_y: 0.0
+    arm_scan_z: 0.50
+    scan_samples: 6
+
+    # -- capture timing --
+    capture_delay_s: 1.2
+    frame_max_age_s: 2.0
+    # The arm is long and keeps swaying after its joints report they have
+    # arrived, so the shutter waits this long after it says it settled.
+    # arm_scanner_node's dwell_time must exceed this or the arm moves off
+    # before the picture is taken.
+    settle_delay_s: 3.0
+    # Only photograph viewpoints where the wrist camera can actually see a
+    # plant. Set false to photograph every viewpoint regardless.
+    require_plant_in_frame: true
+    # A scan ends when the ARM says it has ended. These two only catch an
+    # arm that has gone quiet or plainly hung — they never cut a sweep
+    # that is still reporting progress.
+    scan_silence_timeout_s: 30.0
+    scan_hard_timeout_s: 300.0
+
+    # -- Gemini plant analysis --
+    gemini_model: ''
+    gemini_timeout_s: 20.0
+    gemini_max_retries: 1
+    jpeg_quality: 85
